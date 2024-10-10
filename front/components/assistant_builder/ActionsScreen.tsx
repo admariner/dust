@@ -13,6 +13,7 @@ import {
   MoreIcon,
   Page,
   PlusIcon,
+  Popover,
   TextArea,
   XMarkIcon,
 } from "@dust-tt/sparkle";
@@ -866,9 +867,9 @@ function ActionEditor({
                       name="actionName"
                       placeholder="My tool name…"
                       value={action.name}
-                      onChange={(v) => {
+                      onChange={(e) => {
                         updateAction({
-                          actionName: v.toLowerCase(),
+                          actionName: e.target.value.toLowerCase(),
                           actionDescription: action.description,
                           getNewActionConfig: (old) => old,
                         });
@@ -936,18 +937,18 @@ function ActionEditor({
               isDataSourceAction ? "This data contains…" : "This tool is about…"
             }
             value={action.description}
-            onChange={(v) => {
-              if (v.length < 800) {
+            onChange={(e) => {
+              if (e.target.value.length < 800) {
                 updateAction({
                   actionName: action.name,
-                  actionDescription: v,
+                  actionDescription: e.target.value,
                   getNewActionConfig: (old) => old,
                 });
                 setShowInvalidActionDescError(null);
               }
             }}
             error={showInvalidActionDescError}
-            showErrorLabel={true}
+            showErrorLabel
           />
         </div>
       )}
@@ -963,16 +964,16 @@ function AdvancedSettings({
   setMaxStepsPerRun: (maxStepsPerRun: number | null) => void;
 }) {
   return (
-    <DropdownMenu>
-      <DropdownMenu.Button>
+    <Popover
+      trigger={
         <Button
           label="Advanced settings"
           variant="tertiary"
           size="sm"
           type="menu"
         />
-      </DropdownMenu.Button>
-      <DropdownMenu.Items width={240} overflow="visible">
+      }
+      content={
         <div className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <div className="flex flex-col items-start justify-start">
@@ -987,12 +988,12 @@ function AdvancedSettings({
               value={maxStepsPerRun?.toString() ?? ""}
               placeholder=""
               name="maxStepsPerRun"
-              onChange={(v) => {
-                if (!v || v === "") {
+              onChange={(e) => {
+                if (!e.target.value || e.target.value === "") {
                   setMaxStepsPerRun(null);
                   return;
                 }
-                const value = parseInt(v);
+                const value = parseInt(e.target.value);
                 if (
                   !isNaN(value) &&
                   value >= 0 &&
@@ -1004,8 +1005,8 @@ function AdvancedSettings({
             />
           </div>
         </div>
-      </DropdownMenu.Items>
-    </DropdownMenu>
+      }
+    />
   );
 }
 

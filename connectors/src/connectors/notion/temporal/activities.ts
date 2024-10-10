@@ -1,8 +1,4 @@
-import type {
-  CoreAPIDataSourceDocumentSection,
-  ModelId,
-  NotionGarbageCollectionMode,
-} from "@dust-tt/types";
+import type { CoreAPIDataSourceDocumentSection, ModelId } from "@dust-tt/types";
 import type { PageObjectProperties, ParsedNotionBlock } from "@dust-tt/types";
 import { assertNever, getNotionDatabaseTableId, slugify } from "@dust-tt/types";
 import { isFullBlock, isFullPage, isNotionClientError } from "@notionhq/client";
@@ -18,10 +14,6 @@ import {
   upsertNotionDatabaseInConnectorsDb,
   upsertNotionPageInConnectorsDb,
 } from "@connectors/connectors/notion/lib/connectors_db_helpers";
-import {
-  GARBAGE_COLLECT_MAX_DURATION_MS,
-  isDuringGarbageCollectStartWindow,
-} from "@connectors/connectors/notion/lib/garbage_collect";
 import {
   getBlockParentMemoized,
   getPageOrBlockParent,
@@ -41,6 +33,7 @@ import {
   updateAllParentsFields,
 } from "@connectors/connectors/notion/lib/parents";
 import { getTagsForPage } from "@connectors/connectors/notion/lib/tags";
+import { DATABASE_TO_CSV_MAX_SIZE } from "@connectors/connectors/notion/temporal/config";
 import {
   dataSourceConfigFromConnector,
   dataSourceInfoFromConnector,
@@ -59,6 +52,7 @@ import {
   upsertTableFromCsv,
   upsertToDatasource,
 } from "@connectors/lib/data_sources";
+import { InvalidRowsRequestError } from "@connectors/lib/error";
 import {
   NotionConnectorBlockCacheEntry,
   NotionConnectorPageCacheEntry,
@@ -77,8 +71,24 @@ import type { DataSourceConfig } from "@connectors/types/data_source_config";
 
 const logger = mainLogger.child({ provider: "notion" });
 
-const GARBAGE_COLLECTION_INTERVAL_HOURS = 12;
-const DATABASE_TO_CSV_MAX_SIZE = 256 * 1024 * 1024; // 256MB
+const ignoreInvalidRowsRequestError = async (
+  fn: () => Promise<void>,
+  logger: Logger
+) => {
+  try {
+    return await fn();
+  } catch (err) {
+    if (err instanceof InvalidRowsRequestError) {
+      logger.warn(
+        { error: err },
+        "[Notion table] Invalid rows detected - skipping (but not failing)."
+      );
+    } else {
+      logger.error({ error: err }, "[Notion table] Failed to upsert table.");
+      throw err;
+    }
+  }
+};
 
 export async function fetchDatabaseChildPages({
   connectorId,
@@ -561,12 +571,10 @@ export async function getNotionAccessToken(
   return token.access_token;
 }
 
-export async function shouldGarbageCollect({
+export async function isFullSyncPendingOrOngoing({
   connectorId,
-  garbageCollectionMode,
 }: {
   connectorId: ModelId;
-  garbageCollectionMode: NotionGarbageCollectionMode;
 }): Promise<boolean> {
   const connector = await ConnectorResource.fetchById(connectorId);
   if (!connector) {
@@ -585,54 +593,19 @@ export async function shouldGarbageCollect({
   // If we have never finished a full sync, we should not garbage collect
   const firstSuccessfulSyncTime = connector.firstSuccessfulSyncTime;
   if (!firstSuccessfulSyncTime) {
-    return false;
-  }
-
-  if (
-    notionConnectorState.fullResyncStartTime &&
-    connector.lastSyncFinishTime &&
-    notionConnectorState.fullResyncStartTime > connector.lastSyncFinishTime
-  ) {
-    // If we are currently doing a full resync, we should not garbage collect
-    return false;
-  }
-
-  if (garbageCollectionMode === "never") {
-    return false;
-  }
-
-  if (garbageCollectionMode === "always") {
     return true;
   }
 
-  if (!isDuringGarbageCollectStartWindow()) {
-    // Never garbage collect if we are not in the start window
-    return false;
+  // If we are currently doing a full resync, we should not garbage collect
+  const isDoingAFullResync =
+    notionConnectorState.fullResyncStartTime &&
+    connector.lastSyncFinishTime &&
+    notionConnectorState.fullResyncStartTime > connector.lastSyncFinishTime;
+  if (isDoingAFullResync) {
+    return true;
   }
 
-  const now = new Date().getTime();
-
-  // If we have never done a garbage collection, we should start one
-  // if it has been more than GARBAGE_COLLECTION_INTERVAL_HOURS since the first successful sync
-  if (!notionConnectorState.lastGarbageCollectionFinishTime) {
-    return (
-      now - firstSuccessfulSyncTime.getTime() >=
-      GARBAGE_COLLECTION_INTERVAL_HOURS * 60 * 60 * 1000
-    );
-  }
-
-  const lastGarbageCollectionFinishTime =
-    notionConnectorState.lastGarbageCollectionFinishTime.getTime();
-
-  // if we garbage collected less than GARBAGE_COLLECTION_INTERVAL_HOURS ago, we should not start another one
-  if (
-    now - lastGarbageCollectionFinishTime <=
-    GARBAGE_COLLECTION_INTERVAL_HOURS * 60 * 60 * 1000
-  ) {
-    return false;
-  }
-
-  return true;
+  return false;
 }
 
 // marks all the pageIds and databaseIds as seen in the database (so we know we don't need
@@ -657,7 +630,7 @@ export async function garbageCollectorMarkAsSeenAndReturnNewEntities({
     workspaceId: connector.workspaceId,
   });
 
-  const redisCli = await redisClient();
+  const redisCli = await redisClient({ origin: "notion_gc" });
   const redisKey = redisGarbageCollectorKey(connector.id);
   if (pageIds.length > 0) {
     await redisCli.sAdd(`${redisKey}-pages`, pageIds);
@@ -787,17 +760,14 @@ export async function deleteDatabase({
 //   - query notion API and check if we can access the resource
 //   - if the resource is not accessible, delete it from the database (and from the data source if it's a page)
 // - update the lastGarbageCollectionFinishTime
-// - will give up after `GARBAGE_COLLECT_MAX_DURATION_MS` milliseconds (including retries if any)
 export async function garbageCollectBatch({
   connectorId,
   batchIndex,
   runTimestamp,
-  startTs,
 }: {
   connectorId: ModelId;
   batchIndex: number;
   runTimestamp: number;
-  startTs: number;
 }) {
   const connector = await ConnectorResource.fetchById(connectorId);
   if (!connector) {
@@ -940,19 +910,6 @@ export async function garbageCollectBatch({
         deletedDatabasesCount++;
       }
     }
-
-    if (new Date().getTime() - startTs > GARBAGE_COLLECT_MAX_DURATION_MS) {
-      localLogger.warn(
-        {
-          batchCount: batch.length,
-          deletedPagesCount,
-          deletedDatabasesCount,
-          stillAccessiblePagesCount,
-          stillAccessibleDatabasesCount,
-        },
-        "Garbage collection is taking too long, giving up."
-      );
-    }
   }
 }
 
@@ -960,7 +917,7 @@ export async function completeGarbageCollectionRun(
   connectorId: ModelId,
   nbOfBatches: number
 ) {
-  const redisCli = await redisClient();
+  const redisCli = await redisClient({ origin: "notion_gc" });
   const redisKey = redisGarbageCollectorKey(connectorId);
   await redisCli.del(`${redisKey}-pages`);
   await redisCli.del(`${redisKey}-databases`);
@@ -1079,7 +1036,7 @@ export async function createResourcesNotSeenInGarbageCollectionRunBatches({
   batchSize: number;
 }) {
   const redisKey = redisGarbageCollectorKey(connectorId);
-  const redisCli = await redisClient();
+  const redisCli = await redisClient({ origin: "notion_gc" });
 
   const [pageIdsSeenInRunRaw, databaseIdsSeenInRunRaw] = await Promise.all([
     redisCli.sMembers(`${redisKey}-pages`),
@@ -1161,7 +1118,7 @@ async function getResourcesNotSeenInGarbageCollectionRunBatch(
   batchIndex: number
 ): Promise<GCResource[]> {
   const redisKey = redisGarbageCollectorKey(connectorId);
-  const redisCli = await redisClient();
+  const redisCli = await redisClient({ origin: "notion_gc" });
 
   const batch = await redisCli.get(
     `${redisKey}-resources-not-seen-batch-${batchIndex}`
@@ -1816,7 +1773,7 @@ export async function renderAndUpsertPageFromCache({
         );
         const { tableId, tableName, tableDescription } =
           getTableInfoFromDatabase(parentDb);
-        const rowId = `notion-${pageId}`;
+
         const { csv } = await renderDatabaseFromPages({
           databaseTitle: null,
           pagesProperties: [
@@ -1824,7 +1781,7 @@ export async function renderAndUpsertPageFromCache({
               pageCacheEntry.pagePropertiesText
             ) as PageObjectProperties,
           ],
-          dustIdColumn: [rowId],
+          dustIdColumn: [pageId],
           cellSeparator: ",",
           rowBoundary: "",
         });
@@ -1836,17 +1793,21 @@ export async function renderAndUpsertPageFromCache({
           runTimestamp.toString()
         );
 
-        await upsertTableFromCsv({
-          dataSourceConfig: dataSourceConfigFromConnector(connector),
-          tableId,
-          tableName,
-          tableDescription,
-          tableCsv: csv,
-          loggerArgs,
-          // We only update the rowId of for the page without truncating the rest of the table (incremental sync).
-          truncate: false,
-          parents,
-        });
+        await ignoreInvalidRowsRequestError(
+          () =>
+            upsertTableFromCsv({
+              dataSourceConfig: dataSourceConfigFromConnector(connector),
+              tableId,
+              tableName,
+              tableDescription,
+              tableCsv: csv,
+              loggerArgs,
+              // We only update the rowId of for the page without truncating the rest of the table (incremental sync).
+              truncate: false,
+              parents,
+            }),
+          localLogger
+        );
       } else {
         localLogger.info(
           "notionRenderAndUpsertPageFromCache: Skipping page as parent database has not been synced as structured data."
@@ -2535,17 +2496,22 @@ export async function upsertDatabaseStructuredDataFromCache({
   );
 
   localLogger.info("Upserting Notion Database as Table.");
-  await upsertTableFromCsv({
-    dataSourceConfig,
-    tableId,
-    tableName,
-    tableDescription,
-    tableCsv: csv,
-    loggerArgs,
-    // We overwrite the whole table since we just fetched all child pages.
-    truncate: true,
-    parents,
-  });
+  await ignoreInvalidRowsRequestError(
+    () =>
+      upsertTableFromCsv({
+        dataSourceConfig,
+        tableId,
+        tableName,
+        tableDescription,
+        tableCsv: csv,
+        loggerArgs,
+        // We overwrite the whole table since we just fetched all child pages.
+        truncate: true,
+        parents,
+      }),
+    localLogger
+  );
+
   // Same as above, but without the `dustId` column
   const { csv: csvForDocument, originalHeader: headerForDocument } =
     await renderDatabaseFromPages({

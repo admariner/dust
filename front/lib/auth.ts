@@ -339,11 +339,6 @@ export class Authenticator {
     const getSubscriptionForWorkspace = (workspace: Workspace) =>
       subscriptionForWorkspace(renderLightWorkspaceType({ workspace }));
 
-    const getFeatureFlags = async (workspace: Workspace) =>
-      (await FeatureFlag.findAll({ where: { workspaceId: workspace.id } })).map(
-        (flag) => flag.name
-      );
-
     let keyGroups: GroupResource[] = [];
     let requestedGroups: GroupResource[] = [];
     let keyFlags: WhitelistableFeature[] = [];
@@ -447,7 +442,7 @@ export class Authenticator {
     );
 
     return new Authenticator({
-      flags: [],
+      flags: await getFeatureFlags(workspace),
       groups,
       role: "builder",
       subscription: null,
@@ -476,7 +471,6 @@ export class Authenticator {
     let subscription: SubscriptionType | null = null;
     let flags: WhitelistableFeature[] = [];
 
-    // TODO(GROUPS_INFRA): this should be refactored to use the new groups infra.
     [globalGroup, subscription, flags] = await Promise.all([
       GroupResource.internalFetchWorkspaceGlobalGroup(workspace.id),
       subscriptionForWorkspace(renderLightWorkspaceType({ workspace })),
@@ -517,8 +511,6 @@ export class Authenticator {
     let subscription: SubscriptionType | null = null;
     let flags: WhitelistableFeature[] = [];
 
-    // TODO(GROUPS_INFRA): maybe this group should access not only to the global group
-    // but all groups? To be answered while moving forward with this new infra.
     [globalGroup, subscription, flags] = await Promise.all([
       GroupResource.internalFetchWorkspaceGlobalGroup(workspace.id),
       subscriptionForWorkspace(renderLightWorkspaceType({ workspace })),
@@ -551,7 +543,6 @@ export class Authenticator {
    * @param param1
    * @returns
    */
-  // TODO(2024-08-05 flav) Use user-id instead of email to avoid ambiguity.
   async exchangeSystemKeyForUserAuthByEmail(
     auth: Authenticator,
     { userEmail }: { userEmail: string }
@@ -752,6 +743,10 @@ export class Authenticator {
   canWrite(acls: ACLType[]): boolean {
     return this.hasPermission(acls, "write");
   }
+
+  key(): KeyAuthType | null {
+    return this._key ?? null;
+  }
 }
 
 /**
@@ -898,3 +893,8 @@ export async function prodAPICredentialsForOwner(
     workspaceId: owner.sId,
   };
 }
+
+const getFeatureFlags = async (workspace: Workspace) =>
+  (await FeatureFlag.findAll({ where: { workspaceId: workspace.id } })).map(
+    (flag) => flag.name
+  );

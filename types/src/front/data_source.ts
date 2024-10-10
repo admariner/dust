@@ -14,6 +14,11 @@ export const CONNECTOR_PROVIDERS = [
   "snowflake",
 ] as const;
 
+export const MANAGED_DS_DELETABLE: ConnectorProvider[] = [
+  "webcrawler",
+  "snowflake",
+];
+
 export const CONNECTOR_TYPE_TO_NAME: Record<ConnectorProvider, string> = {
   confluence: "Confluence",
   github: "GitHub",
@@ -114,12 +119,6 @@ export function isDataSourceNameValid(name: string): Result<void, string> {
   }
   if (name.startsWith("managed-")) {
     return new Err("DataSource name cannot start with the prefix `managed-`");
-  }
-  // eslint-disable-next-line no-useless-escape
-  if (!name.match(/^[a-zA-Z0-9\._\-]+$/)) {
-    return new Err(
-      "DataSource name must only contain letters, numbers, and the characters `._-`"
-    );
   }
 
   return new Ok(undefined);

@@ -3,18 +3,18 @@
 // eslint-disable-next-line @typescript-eslint/no-empty-interface
 import type {
   DataSourceViewCategory,
-  DataSourceViewKind,
   DataSourceViewType,
   ModelId,
   PokeDataSourceViewType,
   Result,
 } from "@dust-tt/types";
-import { Err, formatUserFullName, Ok, removeNulls } from "@dust-tt/types";
+import { formatUserFullName, Ok, removeNulls } from "@dust-tt/types";
 import type {
   Attributes,
   CreationAttributes,
   ModelStatic,
   Transaction,
+  WhereOptions,
 } from "sequelize";
 import { Op } from "sequelize";
 
@@ -30,6 +30,7 @@ import { ResourceWithVault } from "@app/lib/resources/resource_with_vault";
 import { frontSequelize } from "@app/lib/resources/storage";
 import type { DataSourceModel } from "@app/lib/resources/storage/models/data_source";
 import { DataSourceViewModel } from "@app/lib/resources/storage/models/data_source_view";
+import { VaultModel } from "@app/lib/resources/storage/models/vaults";
 import type { ReadonlyAttributesType } from "@app/lib/resources/storage/types";
 import {
   getResourceIdFromSId,
@@ -55,10 +56,13 @@ const getDataSourceCategory = (
 };
 
 export type FetchDataSourceViewOptions = {
+  includeDeleted?: boolean;
   includeEditedBy?: boolean;
   limit?: number;
   order?: [string, "ASC" | "DESC"][];
 };
+
+type AllowedSearchColumns = "vaultId" | "dataSourceId" | "kind" | "vaultKind";
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-declaration-merging
 export interface DataSourceViewResource
@@ -124,11 +128,10 @@ export class DataSourceViewResource extends ResourceWithVault<DataSourceViewMode
         vault,
         transaction
       );
-      return this.createViewInVaultFromDataSourceIncludingAllDocuments(
+      return this.createDefaultViewInVaultFromDataSourceIncludingAllDocuments(
         auth,
         dataSource.vault,
         dataSource,
-        "default",
         transaction
       );
     });
@@ -138,7 +141,7 @@ export class DataSourceViewResource extends ResourceWithVault<DataSourceViewMode
     auth: Authenticator,
     vault: VaultResource,
     dataSource: DataSourceResource,
-    parentsIn: string[] | null
+    parentsIn: string[]
   ) {
     return this.makeNew(
       auth,
@@ -154,11 +157,10 @@ export class DataSourceViewResource extends ResourceWithVault<DataSourceViewMode
   }
 
   // This view has access to all documents, which is represented by null.
-  static async createViewInVaultFromDataSourceIncludingAllDocuments(
+  private static async createDefaultViewInVaultFromDataSourceIncludingAllDocuments(
     auth: Authenticator,
     vault: VaultResource,
     dataSource: DataSourceResource,
-    kind: DataSourceViewKind = "default",
     transaction?: Transaction
   ) {
     return this.makeNew(
@@ -167,7 +169,7 @@ export class DataSourceViewResource extends ResourceWithVault<DataSourceViewMode
         dataSourceId: dataSource.id,
         parentsIn: null,
         workspaceId: vault.workspaceId,
-        kind,
+        kind: "default",
       },
       vault,
       dataSource,
@@ -207,9 +209,12 @@ export class DataSourceViewResource extends ResourceWithVault<DataSourceViewMode
     fetchDataSourceViewOptions?: FetchDataSourceViewOptions,
     options?: ResourceFindOptions<DataSourceViewModel>
   ) {
+    const { includeDeleted } = fetchDataSourceViewOptions ?? {};
+
     const dataSourceViews = await this.baseFetchWithAuthorization(auth, {
       ...this.getOptions(fetchDataSourceViewOptions),
       ...options,
+      includeDeleted,
     });
 
     const dataSourceIds = removeNulls(
@@ -352,6 +357,45 @@ export class DataSourceViewResource extends ResourceWithVault<DataSourceViewMode
     return dataSourceViews ?? null;
   }
 
+  static async search(
+    auth: Authenticator,
+    searchParams: {
+      [key in AllowedSearchColumns]: string | number | undefined;
+    }
+  ): Promise<DataSourceViewResource[]> {
+    const owner = auth.workspace();
+    if (!owner) {
+      return [];
+    }
+
+    const whereClause: WhereOptions = {
+      workspaceId: owner.id,
+    };
+
+    for (const [key, value] of Object.entries(searchParams)) {
+      if (value && key !== "vaultKind") {
+        whereClause[key] = value;
+      } else {
+        whereClause["$vault.kind$"] = searchParams.vaultKind;
+      }
+    }
+
+    return this.baseFetch(
+      auth,
+      {},
+      {
+        where: whereClause,
+        order: [["updatedAt", "DESC"]],
+        includes: [
+          {
+            model: VaultModel,
+            as: "vault",
+          },
+        ],
+      }
+    );
+  }
+
   // Updating.
 
   async setEditedBy(auth: Authenticator) {
@@ -381,59 +425,78 @@ export class DataSourceViewResource extends ResourceWithVault<DataSourceViewMode
   }
 
   async updateParents(
+    parentsToAdd: string[] = [],
+    parentsToRemove: string[] = []
+  ): Promise<Result<undefined, Error>> {
+    const currentParents = this.parentsIn || [];
+
+    // add new parents
+    const newParents = [...new Set(currentParents), ...new Set(parentsToAdd)];
+
+    // remove specified parents
+    const updatedParents = newParents.filter(
+      (parent) => !parentsToRemove.includes(parent)
+    );
+
+    await this.update({ parentsIn: updatedParents });
+
+    return new Ok(undefined);
+  }
+
+  async setParents(
     parentsIn: string[] | null
   ): Promise<Result<undefined, Error>> {
     await this.update({ parentsIn });
-
     return new Ok(undefined);
   }
 
   // Deletion.
 
-  async delete(
+  protected async softDelete(
     auth: Authenticator,
     transaction?: Transaction
-  ): Promise<Result<undefined, Error>> {
-    try {
-      // Delete agent configurations elements pointing to this data source view.
-      await AgentDataSourceConfiguration.destroy({
-        where: {
-          dataSourceViewId: this.id,
-        },
-        transaction,
-      });
-      await AgentTablesQueryConfigurationTable.destroy({
-        where: {
-          dataSourceViewId: this.id,
-        },
-      });
-
-      await this.model.destroy({
-        where: {
-          workspaceId: auth.getNonNullableWorkspace().id,
-          id: this.id,
-        },
-        transaction,
-      });
-
-      return new Ok(undefined);
-    } catch (err) {
-      return new Err(err as Error);
-    }
-  }
-
-  // This method can only be used once all agent configurations have been deleted. Otherwise use the
-  // delete method on each data source view separately.
-  static async deleteAllForWorkspace(
-    auth: Authenticator,
-    transaction?: Transaction
-  ) {
-    return this.model.destroy({
+  ): Promise<Result<number, Error>> {
+    const deletedCount = await DataSourceViewModel.destroy({
       where: {
         workspaceId: auth.getNonNullableWorkspace().id,
+        id: this.id,
+      },
+      transaction,
+      hardDelete: false,
+    });
+
+    return new Ok(deletedCount);
+  }
+
+  async hardDelete(
+    auth: Authenticator,
+    transaction?: Transaction
+  ): Promise<Result<number, Error>> {
+    // Delete agent configurations elements pointing to this data source view.
+    await AgentDataSourceConfiguration.destroy({
+      where: {
+        dataSourceViewId: this.id,
       },
       transaction,
     });
+    await AgentTablesQueryConfigurationTable.destroy({
+      where: {
+        dataSourceViewId: this.id,
+      },
+    });
+
+    const deletedCount = await DataSourceViewModel.destroy({
+      where: {
+        workspaceId: auth.getNonNullableWorkspace().id,
+        id: this.id,
+      },
+      transaction,
+      // Use 'hardDelete: true' to ensure the record is permanently deleted from the database,
+      // bypassing the soft deletion in place.
+      hardDelete: true,
+    });
+
+    return new Ok(deletedCount);
   }
 
   // Getters.

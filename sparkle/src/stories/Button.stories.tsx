@@ -1,7 +1,15 @@
 import type { Meta, StoryObj } from "@storybook/react";
 import React from "react";
 
-import { Button, Cog6ToothIcon } from "../index_with_tw_base";
+import {
+  Button,
+  Cog6ToothIcon,
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipRoot,
+  TooltipTrigger,
+} from "../index_with_tw_base";
 
 const meta = {
   title: "Primitives/Button",
@@ -245,53 +253,6 @@ export const ButtonExamples = () => (
         size="xs"
         label="Settings"
         icon={Cog6ToothIcon}
-        disabled
-      />
-    </div>
-    <div className="s-flex s-items-center s-gap-4">
-      <Button
-        variant="avatar"
-        size="lg"
-        label="@soupinou"
-        avatar="https://dust.tt/static/droidavatar/Droid_Indigo_7.jpg"
-      />
-      <Button
-        variant="avatar"
-        size="md"
-        label="@soupinou"
-        avatar="https://dust.tt/static/droidavatar/Droid_Indigo_7.jpg"
-      />
-      <Button
-        variant="avatar"
-        size="md"
-        label="@soupinou"
-        avatar="https://dust.tt/static/droidavatar/Droid_Indigo_7.jpg"
-        disabled={true}
-      />
-      <Button
-        variant="avatar"
-        size="sm"
-        label="@soupinou"
-        avatar="https://dust.tt/static/droidavatar/Droid_Indigo_7.jpg"
-      />
-      <Button
-        variant="avatar"
-        size="sm"
-        label="@soupinou"
-        avatar="https://dust.tt/static/droidavatar/Droid_Indigo_7.jpg"
-        disabled
-      />
-      <Button
-        variant="avatar"
-        size="xs"
-        label="@soupinou"
-        avatar="https://dust.tt/static/droidavatar/Droid_Indigo_7.jpg"
-      />
-      <Button
-        variant="avatar"
-        size="xs"
-        label="@soupinou"
-        avatar="https://dust.tt/static/droidavatar/Droid_Indigo_7.jpg"
         disabled
       />
     </div>
@@ -564,6 +525,42 @@ export const ButtonSelectExamples = () => (
   </div>
 );
 
+export const ButtonWithTooltipManualInstantiation = () => {
+  return (
+    <TooltipProvider>
+      <TooltipRoot>
+        <TooltipTrigger>
+          <Button
+            labelVisible={true}
+            label="New conversation"
+            icon={Cog6ToothIcon}
+            hasMagnifying={false}
+          />
+        </TooltipTrigger>
+        <TooltipContent>
+          <p>Hello</p>
+        </TooltipContent>
+      </TooltipRoot>
+    </TooltipProvider>
+  );
+};
+
+export const ButtonWithTooltip = () => {
+  return (
+    <Tooltip
+      trigger={
+        <Button
+          labelVisible={true}
+          label="New conversation"
+          icon={Cog6ToothIcon}
+          hasMagnifying={false}
+        />
+      }
+      label={"Hello"}
+    />
+  );
+};
+
 export const Primary: Story = {
   args: {
     variant: "primary",
@@ -622,7 +619,7 @@ export const IconOnlyPlusTooltip: Story = {
     labelVisible: false,
     icon: Cog6ToothIcon,
     disabled: false,
-    tooltipPosition: "below",
+    tooltipPosition: "bottom",
   },
 };
 
@@ -634,7 +631,7 @@ export const IconOnlyNoTooltip: Story = {
     labelVisible: false,
     icon: Cog6ToothIcon,
     disabled: false,
-    tooltipPosition: "below",
+    tooltipPosition: "bottom",
     disabledTooltip: true,
   },
 };

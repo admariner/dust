@@ -149,8 +149,8 @@ export default function VaultFolderModal({
                   placeholder="folder_name"
                   name="name"
                   value={name}
-                  onChange={(value) => {
-                    setName(value);
+                  onChange={(e) => {
+                    setName(e.target.value);
                   }}
                   error={error}
                   disabled={!!dataSourceView} // We cannot change the name of a datasource
@@ -169,9 +169,9 @@ export default function VaultFolderModal({
               <div className="w-full">
                 <TextArea
                   placeholder="Folder description"
-                  value={description}
-                  onChange={(value) => {
-                    setDescription(value);
+                  value={description ?? ""}
+                  onChange={(e) => {
+                    setDescription(e.target.value);
                   }}
                   showErrorLabel
                   minRows={2}

@@ -5,7 +5,7 @@ import {
   FolderIcon,
   GlobeAltIcon,
   Item,
-  LockIcon,
+  PlusIcon,
   Tree,
 } from "@dust-tt/sparkle";
 import type {
@@ -24,6 +24,7 @@ import type { ComponentType, ReactElement } from "react";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 
 import { getConnectorProviderLogoWithFallback } from "@app/lib/connector_providers";
+import { getVisualForContentNode } from "@app/lib/content_nodes";
 import { getDataSourceNameFromView } from "@app/lib/data_sources";
 import { useApps } from "@app/lib/swr/apps";
 import { useDataSourceViewContentNodes } from "@app/lib/swr/data_source_views";
@@ -39,7 +40,7 @@ interface VaultSideBarMenuProps {
   isPrivateVaultsEnabled: boolean;
   owner: LightWorkspaceType;
   isAdmin: boolean;
-  setShowVaultCreationModal: (show: boolean) => void;
+  setShowVaultCreationModal?: (show: boolean) => void;
 }
 
 export default function VaultSideBarMenu({
@@ -98,29 +99,35 @@ export default function VaultSideBarMenu({
             if (kind === "public" && !vaults.length) {
               return null;
             }
-            if (kind === "regular" && !isPrivateVaultsEnabled) {
-              return null;
+            if (kind === "regular") {
+              if (!isPrivateVaultsEnabled) {
+                return null;
+              } else if (!vaults.length && !isAdmin) {
+                return null;
+              }
             }
 
             const sectionLabel = getSectionLabel(kind);
 
             return (
               <Fragment key={`vault-section-${index}`}>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between pr-1">
                   <Item.SectionHeader
                     label={sectionLabel}
                     variant="secondary"
                   />
-                  {sectionLabel === "PRIVATE" && isAdmin && (
-                    <Button
-                      className="mt-4"
-                      size="xs"
-                      variant="tertiary"
-                      label="Create Vault"
-                      icon={LockIcon}
-                      onClick={() => setShowVaultCreationModal(true)}
-                    />
-                  )}
+                  {sectionLabel === "VAULTS" &&
+                    isAdmin &&
+                    setShowVaultCreationModal && (
+                      <Button
+                        className="mt-4"
+                        size="xs"
+                        variant="tertiary"
+                        label="Create Vault"
+                        icon={PlusIcon}
+                        onClick={() => setShowVaultCreationModal(true)}
+                      />
+                    )}
                 </div>
                 {renderVaultItems(
                   vaults.toSorted(compareVaults),
@@ -163,10 +170,10 @@ const getSectionLabel = (kind: VaultKind) => {
       return "SHARED";
 
     case "regular":
-      return "PRIVATE";
+      return "VAULTS";
 
     case "system":
-      return "SYSTEM";
+      return "";
 
     case "public":
       return "PUBLIC";
@@ -180,12 +187,11 @@ const getSectionLabel = (kind: VaultKind) => {
 
 const SYSTEM_VAULTS_ITEMS = [
   {
-    label: "Connection Management",
+    label: "Connection Admin",
     visual: CloudArrowLeftRightIcon,
     tailwindIconTextColor: "text-brand",
     category: "managed" as DataSourceViewCategory,
   },
-  // TODO(GROUPS_UI) Add support for Dust apps.
 ];
 
 const SystemVaultMenu = ({
@@ -453,7 +459,7 @@ const VaultDataSourceViewItem = ({
   }, [isAncestorToCurrentPage]);
 
   const LogoComponent = node
-    ? undefined
+    ? getVisualForContentNode(node)
     : getConnectorProviderLogoWithFallback(
         item.dataSource.connectorProvider,
         FolderIcon
@@ -463,8 +469,11 @@ const VaultDataSourceViewItem = ({
     ? `${basePath}?parentId=${node?.internalId}`
     : basePath;
 
+  const isEmpty = isExpanded && !isNodesLoading && nodes.length === 0;
   const folders = nodes.filter((node) => node.expandable);
-  const isEmpty = isExpanded && !isNodesLoading && folders.length === 0;
+  const notFolders = nodes.filter((node) => !node.expandable);
+  const itemsLabel = notFolders.length === 1 ? "item" : "items";
+
   return (
     <Tree.Item
       isNavigatable
@@ -488,6 +497,11 @@ const VaultDataSourceViewItem = ({
               node={node}
             />
           ))}
+          {notFolders.length > 0 && (
+            <Tree.Empty
+              label={`+ ${notFolders.length} ${folders.length > 0 ? "other " : ""} ${itemsLabel}`}
+            />
+          )}
         </Tree>
       )}
     </Tree.Item>

@@ -19,8 +19,11 @@ import { WorkspaceDomain } from "../../front/workspace";
 import { WhitelistableFeature } from "../../shared/feature_flags";
 import { LoggerInterface } from "../../shared/logger";
 import { Err, Ok, Result } from "../../shared/result";
+import { PatchDataSourceViewType } from "../api_handlers/public/vaults";
 import { ContentFragmentType } from "../content_fragment";
+import { DataSourceViewType } from "../data_source_view";
 import {
+  AgentActionSpecificEvent,
   AgentActionSuccessEvent,
   AgentErrorEvent,
   AgentMessageSuccessEvent,
@@ -707,6 +710,7 @@ export class DustAPI {
       | AgentActionSuccessEvent
       | GenerationTokensEvent
       | AgentMessageSuccessEvent
+      | AgentActionSpecificEvent
     )[] = [];
 
     const parser = createParser((event) => {
@@ -735,6 +739,16 @@ export class DustAPI {
                 pendingEvents.push(data as AgentMessageSuccessEvent);
                 break;
               }
+              case "retrieval_params":
+              case "dust_app_run_params":
+              case "dust_app_run_block":
+              case "tables_query_params":
+              case "tables_query_output":
+              case "process_params":
+              case "websearch_params":
+              case "browse_params":
+                pendingEvents.push(data as AgentActionSpecificEvent);
+                break;
             }
           } catch (err) {
             this._logger.error(
@@ -907,6 +921,50 @@ export class DustAPI {
     }
 
     return new Ok(r.value.feature_flags);
+  }
+
+  async searchDataSourceViews(
+    searchParams: URLSearchParams
+  ): Promise<DustAPIResponse<DataSourceViewType[]>> {
+    const endpoint = `${this.apiUrl()}/api/v1/w/${this.workspaceId()}/data_source_views/search?${searchParams.toString()}`;
+    const res = await this._fetchWithError(endpoint, {
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this._credentials.apiKey}`,
+      },
+    });
+    const r: DustAPIResponse<{ data_source_views: DataSourceViewType[] }> =
+      await this._resultFromResponse(res);
+    if (r.isErr()) {
+      return r;
+    }
+
+    return new Ok(r.value.data_source_views);
+  }
+
+  async patchDataSourceViews(
+    dataSourceView: DataSourceViewType,
+    patchData: PatchDataSourceViewType
+  ) {
+    const endpoint = `${this.apiUrl()}/api/v1/w/${this.workspaceId()}/data_source_views/${
+      dataSourceView.id
+    }`;
+    const res = await this._fetchWithError(endpoint, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this._credentials.apiKey}`,
+      },
+      body: JSON.stringify(patchData),
+    });
+    const r: DustAPIResponse<{ data_source_views: DataSourceViewType[] }> =
+      await this._resultFromResponse(res);
+    if (r.isErr()) {
+      return r;
+    }
+
+    return new Ok(undefined);
   }
 
   private async _fetchWithError(

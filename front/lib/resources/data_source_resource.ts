@@ -5,7 +5,7 @@ import type {
   PokeDataSourceType,
   Result,
 } from "@dust-tt/types";
-import { Err, formatUserFullName, Ok, removeNulls } from "@dust-tt/types";
+import { formatUserFullName, Ok, removeNulls } from "@dust-tt/types";
 import type {
   Attributes,
   CreationAttributes,
@@ -50,6 +50,7 @@ export type FetchDataSourceOrigin =
   | "v1_data_sources_tokenize";
 
 export type FetchDataSourceOptions = {
+  includeDeleted?: boolean;
   includeEditedBy?: boolean;
   limit?: number;
   order?: [string, "ASC" | "DESC"][];
@@ -132,9 +133,12 @@ export class DataSourceResource extends ResourceWithVault<DataSourceModel> {
     fetchDataSourceOptions?: FetchDataSourceOptions,
     options?: ResourceFindOptions<DataSourceModel>
   ) {
+    const { includeDeleted } = fetchDataSourceOptions ?? {};
+
     return this.baseFetchWithAuthorization(auth, {
       ...this.getOptions(fetchDataSourceOptions),
       ...options,
+      includeDeleted,
     });
   }
 
@@ -338,12 +342,20 @@ export class DataSourceResource extends ResourceWithVault<DataSourceModel> {
     });
   }
 
-  static async listByVault(auth: Authenticator, vault: VaultResource) {
-    return this.listByVaults(auth, [vault]);
+  static async listByVault(
+    auth: Authenticator,
+    vault: VaultResource,
+    options?: FetchDataSourceOptions
+  ) {
+    return this.listByVaults(auth, [vault], options);
   }
 
-  static async listByVaults(auth: Authenticator, vaults: VaultResource[]) {
-    return this.baseFetch(auth, undefined, {
+  static async listByVaults(
+    auth: Authenticator,
+    vaults: VaultResource[],
+    options?: FetchDataSourceOptions
+  ) {
+    return this.baseFetch(auth, options, {
       where: {
         vaultId: vaults.map((v) => v.id),
       },
@@ -358,10 +370,34 @@ export class DataSourceResource extends ResourceWithVault<DataSourceModel> {
     return dataSource ?? null;
   }
 
-  async delete(
+  protected async softDelete(
     auth: Authenticator,
     transaction?: Transaction
-  ): Promise<Result<undefined, Error>> {
+  ): Promise<Result<number, Error>> {
+    // Directly delete the DataSourceViewModel here to avoid a circular dependency.
+    await DataSourceViewModel.destroy({
+      where: {
+        workspaceId: auth.getNonNullableWorkspace().id,
+        dataSourceId: this.id,
+      },
+      transaction,
+      hardDelete: false,
+    });
+
+    const deletedCount = await this.model.destroy({
+      where: {
+        id: this.id,
+      },
+      transaction,
+    });
+
+    return new Ok(deletedCount);
+  }
+
+  protected async hardDelete(
+    auth: Authenticator,
+    transaction?: Transaction
+  ): Promise<Result<number, Error>> {
     await AgentDataSourceConfiguration.destroy({
       where: {
         dataSourceId: this.id,
@@ -376,28 +412,29 @@ export class DataSourceResource extends ResourceWithVault<DataSourceModel> {
       transaction,
     });
 
-    // We directly delete the DataSourceViewResource.model here to avoid a circular dependency.
-    // DataSourceViewResource depends on DataSourceResource
+    // Directly delete the DataSourceViewModel here to avoid a circular dependency.
     await DataSourceViewModel.destroy({
       where: {
         workspaceId: auth.getNonNullableWorkspace().id,
         dataSourceId: this.id,
       },
       transaction,
+      // Use 'hardDelete: true' to ensure the record is permanently deleted from the database,
+      // bypassing the soft deletion in place.
+      hardDelete: true,
     });
 
-    try {
-      await this.model.destroy({
-        where: {
-          id: this.id,
-        },
-        transaction,
-      });
+    const deletedCount = await DataSourceModel.destroy({
+      where: {
+        id: this.id,
+      },
+      transaction,
+      // Use 'hardDelete: true' to ensure the record is permanently deleted from the database,
+      // bypassing the soft deletion in place.
+      hardDelete: true,
+    });
 
-      return new Ok(undefined);
-    } catch (err) {
-      return new Err(err as Error);
-    }
+    return new Ok(deletedCount);
   }
 
   // Updating.

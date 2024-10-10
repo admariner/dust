@@ -1,9 +1,9 @@
 import {
   AssistantPreview,
   Button,
+  CompanyIcon,
   ListAddIcon,
   LockIcon,
-  PlanetIcon,
   PlusIcon,
   RobotIcon,
   RocketIcon,
@@ -17,13 +17,16 @@ import type {
   WorkspaceType,
 } from "@dust-tt/types";
 import Link from "next/link";
-import React, { useEffect, useMemo, useState } from "react";
-import type { KeyedMutator } from "swr";
+import { useRouter } from "next/router";
+import React, { useMemo, useState } from "react";
 
-import { AssistantDetails } from "@app/components/assistant/AssistantDetails";
 import { AssistantDetailsDropdownMenu } from "@app/components/assistant/AssistantDetailsDropdownMenu";
 import { subFilter } from "@app/lib/utils";
-import type { GetAgentConfigurationsResponseBody } from "@app/pages/api/w/[wId]/assistant/agent_configurations";
+import { setQueryParam } from "@app/lib/utils/router";
+
+function isValidTab(tab: string, visibleTabs: TabId[]): tab is TabId {
+  return visibleTabs.includes(tab as TabId);
+}
 
 interface AssistantListProps {
   owner: WorkspaceType;
@@ -31,13 +34,12 @@ interface AssistantListProps {
   agents: LightAgentConfigurationType[];
   loadingStatus: "loading" | "finished";
   handleAssistantClick: (agent: LightAgentConfigurationType) => void;
-  mutateAgentConfigurations: KeyedMutator<GetAgentConfigurationsResponseBody>;
 }
 
 const ALL_AGENTS_TABS = [
   // default shown tab = earliest in this list with non-empty agents
   { label: "Most popular", icon: RocketIcon, id: "most_popular" },
-  { label: "Company", icon: PlanetIcon, id: "workspace" },
+  { label: "Company", icon: CompanyIcon, id: "workspace" },
   { label: "Shared", icon: UserGroupIcon, id: "published" },
   { label: "Personal", icon: LockIcon, id: "personal" },
   { label: "In my list", icon: ListAddIcon, id: "list" },
@@ -52,13 +54,9 @@ export function AssistantBrowser({
   agents,
   loadingStatus,
   handleAssistantClick,
-  mutateAgentConfigurations,
 }: AssistantListProps) {
   const [assistantSearch, setAssistantSearch] = useState<string>("");
-  const [assistantIdToShow, setAssistantIdToShow] = useState<string | null>(
-    null
-  );
-
+  const router = useRouter();
   const agentsByTab = useMemo(() => {
     const filteredAgents: LightAgentConfigurationType[] = agents
       .filter(
@@ -98,23 +96,18 @@ export function AssistantBrowser({
     return ALL_AGENTS_TABS.filter((tab) => agentsByTab[tab.id].length > 0);
   }, [agentsByTab]);
 
-  // check the query string for the tab to show, the query param to look for is called "defaultTab"
+  // check the query string for the tab to show, the query param to look for is called "selectedTab"
   // if it's not found, show the first tab with agents
-  const defaultTab = useMemo(() => {
-    const queryParams = new URLSearchParams(window.location.search);
-    const defaultTab = queryParams.get("defaultTab") as TabId | null;
-    return visibleTabs.find((tab) => tab.id === defaultTab)
-      ? defaultTab
+  const selectedTab = useMemo(() => {
+    const selectedTab = router.query.selectedTab;
+    return typeof selectedTab === "string" &&
+      isValidTab(
+        selectedTab,
+        visibleTabs.map((tab) => tab.id)
+      )
+      ? selectedTab
       : visibleTabs[0]?.id;
-  }, [visibleTabs]);
-
-  const [selectedTab, setSelectedTab] = useState<TabId | null>(defaultTab);
-
-  useEffect(() => {
-    if (!selectedTab && defaultTab) {
-      setSelectedTab(defaultTab);
-    }
-  }, [defaultTab, selectedTab]);
+  }, [router.query.selectedTab, visibleTabs]);
 
   const displayedTab =
     assistantSearch.trim() !== "" // If search is active, show all agents
@@ -127,12 +120,6 @@ export function AssistantBrowser({
 
   return (
     <>
-      <AssistantDetails
-        assistantId={assistantIdToShow}
-        onClose={() => setAssistantIdToShow(null)}
-        owner={owner}
-        mutateAgentConfigurations={mutateAgentConfigurations}
-      />
       {/* Search bar */}
       <div
         id="search-container"
@@ -146,41 +133,47 @@ export function AssistantBrowser({
           onChange={setAssistantSearch}
         />
         <Button.List>
-          <Tooltip label="Create your own assistant">
-            <Link
-              href={`/w/${owner.sId}/builder/assistants/create?flow=personal_assistants`}
-            >
-              <div className="hidden sm:block">
-                <Button
-                  variant="primary"
-                  icon={PlusIcon}
-                  label="Create"
-                  size="sm"
-                />
-              </div>
-              <div className="sm:hidden">
-                <Button
-                  variant="primary"
-                  icon={PlusIcon}
-                  label="Create"
-                  labelVisible={false}
-                  size="sm"
-                  className="sm:hidden"
-                />
-              </div>
-            </Link>
-          </Tooltip>
-          {isBuilder && (
-            <Tooltip label="Manage assistants">
-              <Link href={`/w/${owner.sId}/builder/assistants/`}>
-                <Button
-                  variant="primary"
-                  icon={RobotIcon}
-                  label="Manage"
-                  size="sm"
-                />
+          <Tooltip
+            label="Create your own assistant"
+            trigger={
+              <Link
+                href={`/w/${owner.sId}/builder/assistants/create?flow=personal_assistants`}
+              >
+                <div className="hidden sm:block">
+                  <Button
+                    variant="primary"
+                    icon={PlusIcon}
+                    label="Create"
+                    size="sm"
+                  />
+                </div>
+                <div className="sm:hidden">
+                  <Button
+                    variant="primary"
+                    icon={PlusIcon}
+                    label="Create"
+                    labelVisible={false}
+                    size="sm"
+                    className="sm:hidden"
+                  />
+                </div>
               </Link>
-            </Tooltip>
+            }
+          />
+          {isBuilder && (
+            <Tooltip
+              label="Manage assistants"
+              trigger={
+                <Link href={`/w/${owner.sId}/builder/assistants/`}>
+                  <Button
+                    variant="primary"
+                    icon={RobotIcon}
+                    label="Manage"
+                    size="sm"
+                  />
+                </Link>
+              }
+            />
           )}
         </Button.List>
       </div>
@@ -193,7 +186,7 @@ export function AssistantBrowser({
             ...tab,
             current: tab.id === displayedTab,
           }))}
-          setCurrentTab={setSelectedTab}
+          setCurrentTab={(t) => setQueryParam(router, "selectedTab", t)}
         />
       </div>
       {!displayedTab && (
@@ -223,9 +216,7 @@ export function AssistantBrowser({
                       agentConfiguration={agent}
                       owner={owner}
                       variant="button"
-                      showAssistantDetails={() =>
-                        setAssistantIdToShow(agent.sId)
-                      }
+                      isMoreInfoVisible
                       canDelete
                     />
                   </div>

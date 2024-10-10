@@ -1,17 +1,27 @@
-import { Citation, Collapsible, TableIcon } from "@dust-tt/sparkle";
-import type { TablesQueryActionType } from "@dust-tt/types";
-import { stringify } from "csv-stringify";
+import {
+  Citation,
+  Collapsible,
+  ContentMessage,
+  InformationCircleIcon,
+  TableIcon,
+} from "@dust-tt/sparkle";
+import type { LightWorkspaceType, TablesQueryActionType } from "@dust-tt/types";
+import { getTablesQueryResultsFileTitle } from "@dust-tt/types";
 import { useCallback, useContext } from "react";
 
 import { ActionDetailsWrapper } from "@app/components/actions/ActionDetailsWrapper";
 import type { ActionDetailsComponentBaseProps } from "@app/components/actions/types";
-import { CodeBlock } from "@app/components/assistant/RenderMessageMarkdown";
+import {
+  CodeBlock,
+  RenderMessageMarkdown,
+} from "@app/components/assistant/RenderMessageMarkdown";
 import { ContentBlockWrapper } from "@app/components/misc/ContentBlockWrapper";
 import { SendNotificationsContext } from "@app/components/sparkle/Notification";
 
 export function TablesQueryActionDetails({
   action,
   defaultOpen,
+  owner,
 }: ActionDetailsComponentBaseProps<TablesQueryActionType>) {
   return (
     <ActionDetailsWrapper
@@ -20,22 +30,9 @@ export function TablesQueryActionDetails({
       visual={TableIcon}
     >
       <div className="flex flex-col gap-1 gap-4 pl-6 pt-4">
-        <div className="flex flex-col gap-1">
-          <span className="text-sm font-bold text-slate-900">Query</span>
-          <div className="text-sm font-normal text-slate-500">
-            <TablesQuery action={action} />
-          </div>
-        </div>
-        <div>
-          <Collapsible defaultOpen={defaultOpen}>
-            <Collapsible.Button>
-              <span className="text-sm font-bold text-slate-900">Results</span>
-            </Collapsible.Button>
-            <Collapsible.Panel>
-              <QueryTablesResults action={action} />
-            </Collapsible.Panel>
-          </Collapsible>
-        </div>
+        <QueryThinking action={action} />
+        <TablesQuery action={action} />
+        <QueryTablesResults action={action} owner={owner} />
       </div>
     </ActionDetailsWrapper>
   );
@@ -44,90 +41,127 @@ export function TablesQueryActionDetails({
 function TablesQuery({ action }: { action: TablesQueryActionType }) {
   const { output } = action;
   const query = typeof output?.query === "string" ? output.query : null;
-  const noQuery = output?.no_query === true;
 
-  if (noQuery || !query) {
+  if (!query) {
     return null;
   }
 
   return (
-    <ContentBlockWrapper content={query}>
-      <CodeBlock
-        className="language-sql max-h-60 overflow-y-auto"
-        wrapLongLines={true}
-      >
-        {query}
-      </CodeBlock>
-    </ContentBlockWrapper>
+    <div className="flex flex-col gap-1">
+      <span className="text-sm font-bold text-slate-900">Query</span>
+      <div className="text-sm font-normal text-slate-500">
+        <ContentBlockWrapper content={query}>
+          <CodeBlock
+            className="language-sql max-h-60 overflow-y-auto"
+            wrapLongLines={true}
+          >
+            {query}
+          </CodeBlock>
+        </ContentBlockWrapper>
+      </div>
+    </div>
   );
 }
 
-type TablesQueryActionWithResultsType = TablesQueryActionType & {
-  output: {
-    query_title?: string;
-    results: unknown[];
-  };
-};
-
-function hasQueryResults(
-  action: TablesQueryActionType
-): action is TablesQueryActionWithResultsType {
+function QueryThinking({ action }: { action: TablesQueryActionType }) {
   const { output } = action;
+  const thinking =
+    typeof output?.thinking === "string" ? output.thinking : null;
+  if (!thinking) {
+    return null;
+  }
 
   return (
-    output !== null &&
-    typeof output === "object" &&
-    "results" in output &&
-    Array.isArray(output.results)
+    <div className="flex flex-col gap-1">
+      <span className="text-sm font-bold text-slate-900">Reasoning</span>
+      <div className="text-sm font-normal text-slate-500">
+        <ContentMessage
+          title="Reasoning"
+          variant="purple"
+          icon={InformationCircleIcon}
+          size="lg"
+        >
+          <RenderMessageMarkdown
+            content={thinking}
+            isStreaming={false}
+            textSize="sm"
+            textColor="purple-800"
+          />
+        </ContentMessage>
+      </div>
+    </div>
   );
 }
 
-function QueryTablesResults({ action }: { action: TablesQueryActionType }) {
+function QueryTablesResults({
+  action,
+  owner,
+}: {
+  action: TablesQueryActionType;
+  owner: LightWorkspaceType;
+}) {
   const sendNotification = useContext(SendNotificationsContext);
+  const { output } = action;
+  const title = getTablesQueryResultsFileTitle({ output });
 
-  const handleDownload = useCallback(
-    (title: string) => {
-      if (!hasQueryResults(action)) {
-        return null;
+  const handleDownload = useCallback(() => {
+    if (action.resultsFileId) {
+      try {
+        const downloadUrl = `/api/w/${owner.sId}/files/${action.resultsFileId}?action=download`;
+        // Open the download URL in a new tab/window. Otherwise we get a CORS error due to the redirection
+        // to cloud storage.
+        window.open(downloadUrl, "_blank");
+      } catch (error) {
+        console.error("Download failed:", error);
+        sendNotification({
+          title: "Download Failed",
+          type: "error",
+          description: "An error occurred while opening the download link.",
+        });
       }
-      if (
-        !action.output ||
-        !action.output.results ||
-        action.output.results.length === 0
-      ) {
-        return;
-      }
-
-      stringify(action.output.results, { header: true }, (err, csvOutput) => {
-        if (err) {
-          sendNotification({
-            title: "Error Downloading CSV",
-            type: "error",
-            description: `An error occurred while downloading the CSV: ${err}`,
-          });
-          return;
-        }
-
-        const blob = new Blob([csvOutput], { type: "text/csv" });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `${title}.csv`;
-        a.click();
+    } else {
+      sendNotification({
+        title: "No Results Available",
+        type: "error",
+        description: "There are no results available to download.",
       });
-    },
-    [action, sendNotification]
-  );
+    }
+  }, [action.resultsFileId, sendNotification, owner.sId]);
 
-  if (!hasQueryResults(action)) {
+  if (!action.resultsFileId!) {
+    if (typeof output?.error === "string") {
+      return (
+        <div>
+          <span className="pb-2 text-sm font-bold text-slate-900">Error</span>
+          <div className="text-sm">{output.error}</div>
+        </div>
+      );
+    }
     return null;
   }
-  const { output } = action;
-  const title = output?.query_title ?? "query_results";
 
   return (
-    <div onClick={() => handleDownload(title)}>
-      <Citation size="xs" title={title} />
+    <div>
+      <span className="text-sm font-bold text-slate-900">Results</span>
+      <div onClick={handleDownload} className="py-2">
+        <Citation size="xs" title={title} />
+      </div>
+
+      <Collapsible defaultOpen={false}>
+        <Collapsible.Button>
+          <span className="text-sm font-bold text-slate-600">Preview</span>
+        </Collapsible.Button>
+        <Collapsible.Panel>
+          <div className="py-2">
+            <CodeBlock
+              className="language-csv max-h-60 overflow-y-auto"
+              wrapLongLines={true}
+            >
+              {action.resultsFileSnippet}
+            </CodeBlock>
+          </div>
+        </Collapsible.Panel>
+      </Collapsible>
     </div>
   );
 }

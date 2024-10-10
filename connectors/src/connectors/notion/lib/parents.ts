@@ -1,6 +1,7 @@
 import type { ModelId } from "@dust-tt/types";
 import { cacheWithRedis } from "@dust-tt/types";
 import PQueue from "p-queue";
+import { Sequelize } from "sequelize";
 
 import {
   getDatabaseChildrenOf,
@@ -52,6 +53,9 @@ async function _getParents(
     //    (see https://dust4ai.slack.com/archives/C050SM8NSPK/p1693241129921369)
     case null:
     case "unknown":
+      // If parentType is unknown, consider it as the parent page id.
+      return [...parents, "unknown"];
+
     case "block":
     case "workspace":
       // workspace -> root level pages, with no parents other than themselves
@@ -240,21 +244,59 @@ function notionPageOrDbId(pageOrDb: NotionPage | NotionDatabase): string {
   );
 }
 
-export const hasChildren = async (page: NotionPage, connectorId: number) => {
-  const [childPage, childDB] = await Promise.all([
-    NotionPage.findOne({
+export const hasChildren = async (pages: NotionPage[], connectorId: number) => {
+  const hasChildrenPage = (
+    await NotionPage.findAll({
+      attributes: [
+        "parentId",
+        [Sequelize.fn("COUNT", Sequelize.col("*")), "count"],
+      ],
       where: {
         connectorId,
-        parentId: page.notionPageId,
+        parentId: pages.map((p) => p.notionPageId),
+      },
+      group: ["parentId"],
+    })
+  ).reduce<Record<string, boolean>>(
+    (acc, d) => (d.parentId ? { ...acc, [d.parentId]: true } : acc),
+    {}
+  );
+
+  const hasChildrenDb = (
+    await NotionDatabase.findAll({
+      attributes: [
+        "parentId",
+        [Sequelize.fn("COUNT", Sequelize.col("*")), "count"],
+      ],
+      where: {
+        connectorId,
+        parentId: pages.map((p) => p.notionPageId),
+      },
+      group: ["parentId"],
+    })
+  ).reduce<Record<string, boolean>>(
+    (acc, d) => (d.parentId ? { ...acc, [d.parentId]: true } : acc),
+    {}
+  );
+
+  return { ...hasChildrenPage, ...hasChildrenDb };
+};
+
+export const getOrphanedCount = async (connectorId: number) => {
+  const [orphanedPagesCount, orphanedDbsCount] = await Promise.all([
+    NotionPage.count({
+      where: {
+        connectorId: connectorId,
+        parentId: "unknown",
       },
     }),
-    NotionDatabase.findOne({
+    NotionDatabase.count({
       where: {
-        connectorId,
-        parentId: page.notionPageId,
+        connectorId: connectorId,
+        parentId: "unknown",
       },
     }),
   ]);
 
-  return childPage || childDB ? true : false;
+  return orphanedDbsCount + orphanedPagesCount;
 };

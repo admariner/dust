@@ -11,11 +11,10 @@ import { DataTypes, Model } from "sequelize";
 import { Workspace } from "@app/lib/models/workspace";
 import { frontSequelize } from "@app/lib/resources/storage";
 import { VaultModel } from "@app/lib/resources/storage/models/vaults";
+import { SoftDeletableModel } from "@app/lib/resources/storage/wrappers";
 
-export class App extends Model<
-  InferAttributes<App>,
-  InferCreationAttributes<App>
-> {
+// TODO(2024-10-04 flav) Remove visibility from here.
+export class AppModel extends SoftDeletableModel<AppModel> {
   declare id: CreationOptional<number>;
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
@@ -35,7 +34,7 @@ export class App extends Model<
   declare vault: NonAttribute<VaultModel>;
   declare workspace: NonAttribute<Workspace>;
 }
-App.init(
+AppModel.init(
   {
     id: {
       type: DataTypes.INTEGER,
@@ -46,6 +45,9 @@ App.init(
       type: DataTypes.DATE,
       allowNull: false,
       defaultValue: DataTypes.NOW,
+    },
+    deletedAt: {
+      type: DataTypes.DATE,
     },
     updatedAt: {
       type: DataTypes.DATE,
@@ -92,17 +94,17 @@ App.init(
   }
 );
 
-Workspace.hasMany(App, {
+Workspace.hasMany(AppModel, {
   foreignKey: { allowNull: false },
   onDelete: "CASCADE",
 });
-App.belongsTo(Workspace);
+AppModel.belongsTo(Workspace);
 
-VaultModel.hasMany(App, {
+VaultModel.hasMany(AppModel, {
   foreignKey: { allowNull: false },
   onDelete: "RESTRICT",
 });
-App.belongsTo(VaultModel);
+AppModel.belongsTo(VaultModel);
 
 export class Provider extends Model<
   InferAttributes<Provider>,
@@ -167,7 +169,7 @@ export class Dataset extends Model<
   declare schema: DatasetSchema | null;
 
   declare workspaceId: ForeignKey<Workspace["id"]>;
-  declare appId: ForeignKey<App["id"]>;
+  declare appId: ForeignKey<AppModel["id"]>;
 }
 Dataset.init(
   {
@@ -205,11 +207,11 @@ Dataset.init(
   }
 );
 
-App.hasMany(Dataset, {
+AppModel.hasMany(Dataset, {
   foreignKey: { allowNull: false },
   onDelete: "CASCADE",
 });
-Dataset.belongsTo(App);
+Dataset.belongsTo(AppModel);
 
 Workspace.hasMany(Dataset, {
   foreignKey: { allowNull: false },
@@ -224,8 +226,8 @@ export class Clone extends Model<
   declare createdAt: CreationOptional<Date>;
   declare updatedAt: CreationOptional<Date>;
 
-  declare fromId: ForeignKey<App["id"]>;
-  declare toId: ForeignKey<App["id"]>;
+  declare fromId: ForeignKey<AppModel["id"]>;
+  declare toId: ForeignKey<AppModel["id"]>;
 }
 Clone.init(
   {
@@ -266,11 +268,11 @@ Clone.init(
     sequelize: frontSequelize,
   }
 );
-Clone.belongsTo(App, {
+Clone.belongsTo(AppModel, {
   foreignKey: { name: "fromId", allowNull: false },
   onDelete: "CASCADE",
 });
-Clone.belongsTo(App, {
+Clone.belongsTo(AppModel, {
   foreignKey: { name: "toId", allowNull: false },
   onDelete: "CASCADE",
 });

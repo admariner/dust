@@ -21,6 +21,7 @@ import type {
   DataSourceViewType,
   DustAppRunConfigurationType,
   RetrievalConfigurationType,
+  TablesQueryConfigurationType,
   WorkspaceType,
 } from "@dust-tt/types";
 import {
@@ -32,8 +33,7 @@ import {
   isTablesQueryConfiguration,
   isWebsearchConfiguration,
 } from "@dust-tt/types";
-import { useContext, useMemo, useState } from "react";
-import type { KeyedMutator } from "swr";
+import { useMemo, useState } from "react";
 
 import { AssistantDetailsDropdownMenu } from "@app/components/assistant/AssistantDetailsDropdownMenu";
 import AssistantListActions from "@app/components/assistant/AssistantListActions";
@@ -42,9 +42,8 @@ import { assistantUsageMessage } from "@app/components/assistant/Usage";
 import { SharingDropdown } from "@app/components/assistant_builder/Sharing";
 import DataSourceViewDocumentModal from "@app/components/DataSourceViewDocumentModal";
 import { DataSourceViewPermissionTree } from "@app/components/DataSourceViewPermissionTree";
-import { SendNotificationsContext } from "@app/components/sparkle/Notification";
+import { getContentNodeInternalIdFromTableId } from "@app/lib/api/content_nodes";
 import { GLOBAL_AGENTS_SID } from "@app/lib/assistant";
-import { updateAgentScope } from "@app/lib/client/dust_api";
 import { getConnectorProviderLogoWithFallback } from "@app/lib/connector_providers";
 import { getVisualForContentNode } from "@app/lib/content_nodes";
 import {
@@ -52,37 +51,39 @@ import {
   getDisplayNameForDataSource,
   isFolder,
 } from "@app/lib/data_sources";
-import { useAgentConfiguration, useAgentUsage } from "@app/lib/swr/assistants";
+import {
+  useAgentConfiguration,
+  useAgentUsage,
+  useUpdateAgentScope,
+} from "@app/lib/swr/assistants";
 import {
   useDataSourceViewContentNodes,
   useDataSourceViews,
 } from "@app/lib/swr/data_source_views";
 import { classNames, timeAgoFrom } from "@app/lib/utils";
-import type { GetAgentConfigurationsResponseBody } from "@app/pages/api/w/[wId]/assistant/agent_configurations";
 
 type AssistantDetailsProps = {
   owner: WorkspaceType;
   onClose: () => void;
-  mutateAgentConfigurations?: KeyedMutator<GetAgentConfigurationsResponseBody>;
   assistantId: string | null;
 };
 
 export function AssistantDetails({
   assistantId,
   onClose,
-  mutateAgentConfigurations,
   owner,
 }: AssistantDetailsProps) {
-  const sendNotification = useContext(SendNotificationsContext);
   const agentUsage = useAgentUsage({
     workspaceId: owner.sId,
     agentConfigurationId: assistantId,
   });
-  const {
-    agentConfiguration,
-    mutateAgentConfiguration: mutateCurrentAgentConfiguration,
-  } = useAgentConfiguration({
+  const { agentConfiguration } = useAgentConfiguration({
     workspaceId: owner.sId,
+    agentConfigurationId: assistantId,
+  });
+
+  const doUpdateScope = useUpdateAgentScope({
+    owner,
     agentConfigurationId: assistantId,
   });
 
@@ -98,30 +99,7 @@ export function AssistantDetails({
     scope: Exclude<AgentConfigurationScope, "global">
   ) => {
     setIsUpdatingScope(true);
-
-    const { success, errorMessage } = await updateAgentScope({
-      scope,
-      owner,
-      agentConfigurationId: agentConfiguration.sId,
-    });
-
-    if (success) {
-      sendNotification({
-        title: `Assistant sharing updated.`,
-        type: "success",
-      });
-      if (mutateAgentConfigurations) {
-        await mutateAgentConfigurations();
-      }
-      await mutateCurrentAgentConfiguration();
-    } else {
-      sendNotification({
-        title: `Error updating assistant sharing.`,
-        description: errorMessage,
-        type: "error",
-      });
-    }
-
+    await doUpdateScope(scope);
     setIsUpdatingScope(false);
   };
 
@@ -167,7 +145,6 @@ export function AssistantDetails({
                 agentConfiguration={agentConfiguration}
                 owner={owner}
                 isParentHovered={true}
-                onAssistantListUpdate={() => void mutateAgentConfigurations?.()}
               />
             </>
           )}
@@ -239,9 +216,9 @@ export function AssistantDetails({
     isDustGlobalAgent: boolean;
     actions: AgentConfigurationType["actions"];
   }) => {
-    const [retrievalActions, otherActions] = useMemo(() => {
+    const [retrievalActions, queryTablesActions, otherActions] = useMemo(() => {
       return actions.reduce(
-        ([dataSources, otherActions], a) => {
+        ([dataSources, queryTables, otherActions], a) => {
           // Since Dust is configured with one search for all, plus individual searches for each managed data source,
           // we hide these additional searches from the user in the UI to avoid displaying the same data source twice.
           // We use the `hidden_dust_search_` prefix to identify these additional searches.
@@ -250,13 +227,16 @@ export function AssistantDetails({
             (!isDustGlobalAgent || !a.name.startsWith("hidden_dust_search_"))
           ) {
             dataSources.push(a);
+          } else if (isTablesQueryConfiguration(a)) {
+            queryTables.push(a);
           } else {
             otherActions.push(a);
           }
-          return [dataSources, otherActions];
+          return [dataSources, queryTables, otherActions];
         },
         [
           [] as RetrievalConfigurationType[],
+          [] as TablesQueryConfigurationType[],
           [] as AgentActionConfigurationType[],
         ]
       );
@@ -282,6 +262,61 @@ export function AssistantDetails({
               ))}
             </div>
           )}
+          {!!queryTablesActions.length && (
+            <div>
+              <div className="pb-2 text-lg font-bold text-element-800">
+                Query Tables
+              </div>
+              {queryTablesActions.map((action, index) => (
+                <div className="flex flex-col gap-2" key={`action-${index}`}>
+                  <DataSourceViewsSection
+                    owner={owner}
+                    dataSourceViews={dataSourceViews}
+                    dataSourceConfigurations={Object.values(
+                      action.tables.reduce(
+                        (dsConfigs, t) => {
+                          // We should never have an undefined dataSourceView here as if it's undefined,
+                          // it means the dataSourceView was deleted and the configuration is invalid But
+                          // we need to handle this case to avoid crashing the UI
+                          const dataSourceView = dataSourceViews.find(
+                            (dsv) => dsv.sId == t.dataSourceViewId
+                          );
+
+                          // Initializing the datasource configuration if we are seeing the id for the first time
+                          dsConfigs[t.dataSourceViewId] ||= {
+                            workspaceId: t.workspaceId,
+                            dataSourceViewId: t.dataSourceViewId,
+                            filter: {
+                              parents:
+                                dataSourceView &&
+                                isFolder(dataSourceView.dataSource)
+                                  ? null
+                                  : { in: [], not: [] },
+                            },
+                          };
+
+                          // Pushing a new parent
+                          if (dataSourceView) {
+                            dsConfigs[
+                              t.dataSourceViewId
+                            ].filter.parents?.in.push(
+                              getContentNodeInternalIdFromTableId(
+                                dataSourceView,
+                                t.tableId
+                              )
+                            );
+                          }
+                          return dsConfigs;
+                        },
+                        {} as Record<string, DataSourceConfiguration>
+                      )
+                    )}
+                    viewType="tables"
+                  />
+                </div>
+              ))}
+            </div>
+          )}
           {otherActions.map((action, index) =>
             isDustAppRunConfiguration(action) ? (
               <div className="flex flex-col gap-2" key={`action-${index}`}>
@@ -289,36 +324,6 @@ export function AssistantDetails({
                   Run Actions
                 </div>
                 <DustAppSection dustApp={action} />
-              </div>
-            ) : isTablesQueryConfiguration(action) ? (
-              <div className="flex flex-col gap-2" key={`action-${index}`}>
-                <div className="text-lg font-bold text-element-800">
-                  Query Tables
-                </div>
-                <DataSourceViewsSection
-                  owner={owner}
-                  dataSourceViews={dataSourceViews}
-                  dataSourceConfigurations={action.tables.map((t) => {
-                    // We should never have an undefined dataSourceView here as if it's undefined,
-                    // it means the dataSourceView was deleted and the configuration is invalid But
-                    // we need to handle this case to avoid crashing the UI
-                    const dataSourceView = dataSourceViews.find(
-                      (dsv) => dsv.sId == t.dataSourceViewId
-                    );
-
-                    return {
-                      workspaceId: t.workspaceId,
-                      dataSourceViewId: t.dataSourceViewId,
-                      filter: {
-                        parents:
-                          dataSourceView && isFolder(dataSourceView.dataSource)
-                            ? null
-                            : { in: [t.tableId], not: [] },
-                      },
-                    };
-                  })}
-                  viewType="tables"
-                />
               </div>
             ) : isProcessConfiguration(action) ? (
               <div className="flex flex-col gap-2" key={`action-${index}`}>
@@ -348,7 +353,9 @@ export function AssistantDetails({
             ) : isBrowseConfiguration(action) ? (
               false
             ) : (
-              !isRetrievalConfiguration(action) && assertNever(action)
+              !isRetrievalConfiguration(action) &&
+              !isTablesQueryConfiguration(action) &&
+              assertNever(action)
             )
           )}
         </>
@@ -425,7 +432,7 @@ function DataSourceViewsSection({
 
           return (
             <Tree.Item
-              key={dsConfig.dataSourceViewId}
+              key={`${dsConfig.dataSourceViewId}-${JSON.stringify(dsConfig.filter)}`}
               type={
                 canBeExpanded(viewType, dataSourceView?.dataSource)
                   ? "node"
@@ -492,7 +499,7 @@ function DataSourceViewSelectedNodes({
         <Tree.Item
           key={node.internalId}
           label={node.titleWithParentsContext ?? node.title}
-          type={node.expandable ? "node" : "leaf"}
+          type={node.expandable && viewType !== "tables" ? "node" : "leaf"}
           visual={getVisualForContentNode(node)}
           className="whitespace-nowrap"
           actions={

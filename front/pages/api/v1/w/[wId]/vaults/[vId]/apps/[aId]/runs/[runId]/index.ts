@@ -24,39 +24,80 @@ export type GetRunResponseBody = {
   run: RunType;
 };
 
+/**
+ * @swagger
+ * /api/v1/w/{wId}/vaults/{vId}/apps/{aId}/runs/{runId}:
+ *   get:
+ *     summary: Get an app run
+ *     description: Retrieve a run for an app in the vault identified by {vId}.
+ *     tags:
+ *       - Apps
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: wId
+ *         required: true
+ *         description: Unique string identifier for the workspace
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: vId
+ *         required: true
+ *         description: ID of the vault
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: aId
+ *         required: true
+ *         description: ID of the app
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: runId
+ *         required: true
+ *         description: ID of the run
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: The run
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 run:
+ *                   $ref: '#/components/schemas/Run'
+ *       400:
+ *         description: Bad Request. Missing or invalid parameters.
+ *       401:
+ *         description: Unauthorized. Invalid or missing authentication token.
+ */
+
 async function handler(
   req: NextApiRequest,
   res: NextApiResponse<WithAPIErrorResponse<GetRunResponseBody>>,
   auth: Authenticator
 ): Promise<void> {
-  const owner = auth.workspace();
-  if (!owner) {
-    return apiError(req, res, {
-      status_code: 404,
-      api_error: {
-        type: "workspace_not_found",
-        message: "The workspace you're trying to access was not found",
-      },
-    });
-  }
+  const owner = auth.getNonNullableWorkspace();
 
-  let vaultId = req.query.vId;
-
-  // Handling the case where vId is undefined to keep support
-  // for the legacy endpoint (not under vault, global vault assumed).
-  if (vaultId === undefined) {
-    const globalVault = await VaultResource.fetchWorkspaceGlobalVault(auth);
-    vaultId = globalVault.sId;
+  // Handling the case where vId is undefined to keep support for the legacy endpoint (not under
+  // vault, global vault assumed for the auth (the authenticator associated with the app, not the
+  // user)).
+  let { vId } = req.query;
+  if (vId === undefined) {
+    vId = (await VaultResource.fetchWorkspaceGlobalVault(auth)).sId;
   }
 
   const app = await AppResource.fetchById(auth, req.query.aId as string);
 
-  if (!app || !app.canRead(auth) || app.vault.sId !== vaultId) {
+  if (!app || !app.canRead(auth) || app.vault.sId !== vId) {
     return apiError(req, res, {
       status_code: 404,
       api_error: {
         type: "app_not_found",
-        message: "The app you're trying to run was not found",
+        message: "The app you're trying to access was not found",
       },
     });
   }
@@ -77,9 +118,6 @@ async function handler(
         "App run retrieve"
       );
 
-      // TODO(spolu): This is borderline security-wise as it allows to recover a full run from the
-      // runId assuming the app is public. We should use getRun and also enforce in getRun that we
-      // retrieve only our own runs. Basically this assumes the `runId` as a secret.
       const coreAPI = new CoreAPI(apiConfig.getCoreAPIConfig(), logger);
       const runRes = await coreAPI.getRun({
         projectId: app.dustAPIProjectId,

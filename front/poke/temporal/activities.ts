@@ -1,9 +1,14 @@
 import { CoreAPI } from "@dust-tt/types";
 import { Storage } from "@google-cloud/storage";
+import assert from "assert";
 import { chunk } from "lodash";
 import { Op } from "sequelize";
 
+import { hardDeleteApp } from "@app/lib/api/apps";
 import config from "@app/lib/api/config";
+import { hardDeleteDataSource } from "@app/lib/api/data_sources";
+import { hardDeleteVault } from "@app/lib/api/vaults";
+import { areAllSubscriptionsCanceled } from "@app/lib/api/workspace";
 import { Authenticator } from "@app/lib/auth";
 import { AgentBrowseAction } from "@app/lib/models/assistant/actions/browse";
 import { AgentDataSourceConfiguration } from "@app/lib/models/assistant/actions/data_sources";
@@ -43,9 +48,7 @@ import { MembershipInvitation, Workspace } from "@app/lib/models/workspace";
 import { AppResource } from "@app/lib/resources/app_resource";
 import { ContentFragmentResource } from "@app/lib/resources/content_fragment_resource";
 import { DataSourceResource } from "@app/lib/resources/data_source_resource";
-import { DataSourceViewResource } from "@app/lib/resources/data_source_view_resource";
 import { FileResource } from "@app/lib/resources/file_resource";
-import { GroupResource } from "@app/lib/resources/group_resource";
 import { KeyResource } from "@app/lib/resources/key_resource";
 import { MembershipResource } from "@app/lib/resources/membership_resource";
 import { RetrievalDocumentResource } from "@app/lib/resources/retrieval_document_resource";
@@ -54,26 +57,46 @@ import { frontSequelize } from "@app/lib/resources/storage";
 import { Provider } from "@app/lib/resources/storage/models/apps";
 import { UserResource } from "@app/lib/resources/user_resource";
 import { VaultResource } from "@app/lib/resources/vault_resource";
+import { renderLightWorkspaceType } from "@app/lib/workspace";
 import logger from "@app/logger/logger";
 
-const { DUST_DATA_SOURCES_BUCKET, SERVICE_ACCOUNT } = process.env;
+const hardDeleteLogger = logger.child({ activity: "hard-delete" });
 
 export async function scrubDataSourceActivity({
-  dustAPIProjectId,
+  dataSourceId,
+  workspaceId,
 }: {
-  dustAPIProjectId: string;
+  dataSourceId: string;
+  workspaceId: string;
 }) {
-  if (!SERVICE_ACCOUNT) {
-    throw new Error("SERVICE_ACCOUNT is not set.");
-  }
-  if (!DUST_DATA_SOURCES_BUCKET) {
-    throw new Error("DUST_DATA_SOURCES_BUCKET is not set.");
+  const auth = await Authenticator.internalAdminForWorkspace(workspaceId);
+  const dataSource = await DataSourceResource.fetchById(auth, dataSourceId, {
+    includeDeleted: true,
+  });
+  if (!dataSource) {
+    hardDeleteLogger.info(
+      { dataSource: { sId: dataSourceId } },
+      "Data source not found."
+    );
+
+    throw new Error("Data source not found.");
   }
 
-  const storage = new Storage({ keyFilename: SERVICE_ACCOUNT });
+  // Ensure the data source has been soft deleted.
+  if (!dataSource.deletedAt) {
+    hardDeleteLogger.info(
+      { dataSource: { sId: dataSourceId } },
+      "Data source is not soft deleted."
+    );
+    throw new Error("Data source is not soft deleted.");
+  }
+
+  const { dustAPIProjectId } = dataSource;
+
+  const storage = new Storage({ keyFilename: config.getServiceAccount() });
 
   const [files] = await storage
-    .bucket(DUST_DATA_SOURCES_BUCKET)
+    .bucket(config.getDustDataSourcesBucket())
     .getFiles({ prefix: dustAPIProjectId });
 
   const chunkSize = 32;
@@ -95,6 +118,44 @@ export async function scrubDataSourceActivity({
       })
     );
   }
+
+  await hardDeleteDataSource(auth, dataSource);
+}
+
+export async function scrubVaultActivity({
+  vaultId,
+  workspaceId,
+}: {
+  vaultId: string;
+  workspaceId: string;
+}) {
+  const auth = await Authenticator.internalAdminForWorkspace(workspaceId);
+  const vault = await VaultResource.fetchById(auth, vaultId, {
+    includeDeleted: true,
+  });
+
+  if (!vault) {
+    throw new Error("Vault not found.");
+  }
+
+  const isDeletableVault =
+    vault.isDeleted() || vault.isGlobal() || vault.isSystem();
+  assert(isDeletableVault, "Vault is not soft deleted.");
+
+  // Delete all the data sources of the vaults.
+  const dataSources = await DataSourceResource.listByVault(auth, vault, {
+    includeDeleted: true,
+  });
+  for (const ds of dataSources) {
+    await scrubDataSourceActivity({
+      dataSourceId: ds.sId,
+      workspaceId,
+    });
+  }
+
+  hardDeleteLogger.info({ vault: vault.sId }, "Deleting vault");
+
+  await hardDeleteVault(auth, vault);
 }
 
 export async function isWorkflowDeletableActivity({
@@ -103,28 +164,9 @@ export async function isWorkflowDeletableActivity({
   workspaceId: string;
 }) {
   const auth = await Authenticator.internalAdminForWorkspace(workspaceId);
-  const workspace = auth.workspace();
-  if (!workspace) {
-    return false;
-  }
+  const workspace = await auth.getNonNullableWorkspace();
 
-  // Workspace must have no data sources.
-  if (
-    (await DataSourceResource.listByWorkspace(auth, { limit: 1 })).length > 0
-  ) {
-    return false;
-  }
-
-  // For now we don't support deleting workspaces who had a paid subscription at some point.
-  const subscriptions = await Subscription.findAll({
-    where: {
-      workspaceId: workspace.id,
-      stripeSubscriptionId: {
-        [Op.not]: null,
-      },
-    },
-  });
-  return subscriptions.length === 0;
+  return areAllSubscriptionsCanceled(renderLightWorkspaceType({ workspace }));
 }
 
 export async function deleteConversationsActivity({
@@ -254,7 +296,14 @@ export async function deleteConversationsActivity({
               where: { conversationId: c.id },
               transaction: t,
             });
-            logger.info(`[Workspace delete] Deleting conversation ${c.sId}`);
+
+            hardDeleteLogger.info(
+              {
+                conversationId: c.sId,
+              },
+              "Deleting conversation"
+            );
+
             await c.destroy({ transaction: t });
           })();
         })
@@ -367,7 +416,7 @@ export async function deleteAgentsActivity({
         },
         transaction: t,
       });
-      logger.info(`[Workspace delete] Deleting agent ${agent.sId}`);
+      hardDeleteLogger.info({ agentId: agent.sId }, "Deleting agent");
       await agent.destroy({ transaction: t });
     }
   });
@@ -378,27 +427,15 @@ export async function deleteAppsActivity({
 }: {
   workspaceId: string;
 }) {
-  const coreAPI = new CoreAPI(config.getCoreAPIConfig(), logger);
   const auth = await Authenticator.internalAdminForWorkspace(workspaceId);
-  const workspace = auth.workspace();
-
-  if (!workspace) {
-    throw new Error("Could not find the workspace.");
-  }
+  const workspace = auth.getNonNullableWorkspace();
 
   const apps = await AppResource.listByWorkspace(auth);
 
   for (const app of apps) {
-    const res = await coreAPI.deleteProject({
-      projectId: app.dustAPIProjectId,
-    });
+    const res = await hardDeleteApp(auth, app);
     if (res.isErr()) {
-      throw new Error(`Error deleting Project from Core: ${res.error.message}`);
-    }
-
-    const delRes = await app.delete(auth);
-    if (delRes.isErr()) {
-      throw new Error(`Error deleting App ${app.sId}: ${delRes.error.message}`);
+      throw res.error;
     }
   }
 
@@ -419,7 +456,7 @@ export async function deleteRunOnDustAppsActivity({
 }: {
   workspaceId: string;
 }) {
-  const coreAPI = new CoreAPI(config.getCoreAPIConfig(), logger);
+  const coreAPI = new CoreAPI(config.getCoreAPIConfig(), hardDeleteLogger);
   const auth = await Authenticator.internalAdminForWorkspace(workspaceId);
   const workspace = auth.workspace();
 
@@ -500,20 +537,46 @@ export async function deleteMembersActivity({
             },
             transaction: t,
           });
-          logger.info(
-            `[Workspace delete] Deleting Membership ${membership.id} and user ${user.id}`
+          hardDeleteLogger.info(
+            {
+              membershipId: membership.id,
+              userId: user.sId,
+            },
+            "Deleting Membership and user"
           );
-          // Delete the user's files
+
+          // Delete the user's files.
           await FileResource.deleteAllForUser(user.toJSON(), t);
-          await membership.delete(auth, t);
-          await user.delete(auth, t);
+          await membership.delete(auth, { transaction: t });
+          await user.delete(auth, { transaction: t });
         }
       } else {
-        logger.info(`[Workspace delete] Deleting Membership ${membership.id}`);
-        await membership.delete(auth, t);
+        hardDeleteLogger.info(
+          {
+            membershipId: membership.id,
+          },
+          "Deleting Membership"
+        );
+        await membership.delete(auth, { transaction: t });
       }
     }
   });
+}
+
+export async function deleteVaultsActivity({
+  workspaceId,
+}: {
+  workspaceId: string;
+}) {
+  const auth = await Authenticator.internalAdminForWorkspace(workspaceId);
+  const vaults = await VaultResource.listWorkspaceVaults(auth);
+
+  for (const vault of vaults) {
+    await scrubVaultActivity({
+      vaultId: vault.sId,
+      workspaceId,
+    });
+  }
 }
 
 export async function deleteWorkspaceActivity({
@@ -522,11 +585,7 @@ export async function deleteWorkspaceActivity({
   workspaceId: string;
 }) {
   const auth = await Authenticator.internalAdminForWorkspace(workspaceId);
-  const workspace = auth.workspace();
-
-  if (!workspace) {
-    throw new Error("Could not find the workspace.");
-  }
+  const workspace = auth.getNonNullableWorkspace();
 
   await frontSequelize.transaction(async (t) => {
     await Subscription.destroy({
@@ -536,10 +595,9 @@ export async function deleteWorkspaceActivity({
       transaction: t,
     });
     await FileResource.deleteAllForWorkspace(workspace, t);
-    await DataSourceViewResource.deleteAllForWorkspace(auth, t);
-    await VaultResource.deleteAllForWorkspace(auth, t);
-    await GroupResource.deleteAllForWorkspace(workspace, t);
-    logger.info(`[Workspace delete] Deleting Worskpace ${workspace.sId}`);
+
+    hardDeleteLogger.info({ workspaceId }, "Deleting Workspace");
+
     await Workspace.destroy({
       where: {
         id: workspace.id,

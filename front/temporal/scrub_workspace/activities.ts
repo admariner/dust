@@ -8,8 +8,12 @@ import {
 import { destroyConversation } from "@app/lib/api/assistant/conversation/destroy";
 import { isGlobalAgentId } from "@app/lib/api/assistant/global_agents";
 import config from "@app/lib/api/config";
-import { deleteDataSource, getDataSources } from "@app/lib/api/data_sources";
+import {
+  getDataSources,
+  softDeleteDataSourceAndLaunchScrubWorkflow,
+} from "@app/lib/api/data_sources";
 import { sendAdminDataDeletionEmail } from "@app/lib/api/email";
+import { softDeleteVaultAndLaunchScrubWorkflow } from "@app/lib/api/vaults";
 import {
   getMembers,
   getWorkspaceInfos,
@@ -22,8 +26,7 @@ import {
   FREE_TEST_PLAN_CODE,
 } from "@app/lib/plans/plan_codes";
 import { subscriptionForWorkspaces } from "@app/lib/plans/subscription";
-import { DataSourceViewResource } from "@app/lib/resources/data_source_view_resource";
-import { GroupResource } from "@app/lib/resources/group_resource";
+import { DataSourceResource } from "@app/lib/resources/data_source_resource";
 import { MembershipResource } from "@app/lib/resources/membership_resource";
 import { UserResource } from "@app/lib/resources/user_resource";
 import { VaultResource } from "@app/lib/resources/vault_resource";
@@ -88,7 +91,6 @@ export async function scrubWorkspaceData({
   await archiveAssistants(auth);
   await deleteDatasources(auth);
   await deleteVaults(auth);
-  await deleteGroups(auth);
   await cleanupCustomerio(auth);
 }
 
@@ -150,38 +152,38 @@ async function archiveAssistants(auth: Authenticator) {
 }
 
 async function deleteDatasources(auth: Authenticator) {
-  // First, we delete all the data source views.
-  const dataSourceViews = await DataSourceViewResource.listByWorkspace(auth);
-  for (const dataSourceView of dataSourceViews) {
-    const r = await dataSourceView.delete(auth);
-    if (r.isErr()) {
-      throw new Error(`Failed to delete data source view: ${r.error.message}`);
-    }
-  }
+  const globalAndSystemVaults =
+    await VaultResource.listWorkspaceDefaultVaults(auth);
 
-  // Then, we delete all the data sources.
-  const dataSources = await getDataSources(auth);
-  for (const dataSource of dataSources) {
-    const r = await deleteDataSource(auth, dataSource);
+  // Retrieve and delete all data sources associated with the system and global vaults.
+  // Others will be deleted when deleting the vaults.
+  const dataSources = await DataSourceResource.listByVaults(
+    auth,
+    globalAndSystemVaults
+  );
+
+  for (const ds of dataSources) {
+    // Perform a soft delete and initiate a workflow for permanent deletion of the data source.
+    const r = await softDeleteDataSourceAndLaunchScrubWorkflow(auth, ds);
     if (r.isErr()) {
       throw new Error(`Failed to delete data source: ${r.error.message}`);
     }
   }
 }
 
-// Delete all vaults except the system and global vaults.
+// Remove all user-created vaults and their associated groups,
+// preserving only the system and global vaults.
 async function deleteVaults(auth: Authenticator) {
-  await VaultResource.deleteAllForWorkspaceExceptDefaults(auth);
-}
+  const vaults = await VaultResource.listWorkspaceVaults(auth);
 
-// Delete all groups except the default groups.
-async function deleteGroups(auth: Authenticator) {
-  const workspace = auth.workspace();
-  if (!workspace) {
-    throw new Error("No workspace found");
+  // Filter out system and global vaults.
+  const filteredVaults = vaults.filter(
+    (vault) => !vault.isGlobal() && !vault.isSystem()
+  );
+
+  for (const vault of filteredVaults) {
+    await softDeleteVaultAndLaunchScrubWorkflow(auth, vault);
   }
-
-  await GroupResource.deleteAllForWorkspaceExceptDefaults(auth);
 }
 
 async function cleanupCustomerio(auth: Authenticator) {

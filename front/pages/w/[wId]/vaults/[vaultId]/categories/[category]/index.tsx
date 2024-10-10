@@ -3,7 +3,6 @@ import type {
   ConnectorProvider,
   DataSourceViewCategory,
   DataSourceWithConnectorDetailsType,
-  PlanType,
   VaultType,
 } from "@dust-tt/types";
 import {
@@ -35,7 +34,6 @@ export const getServerSideProps = withDefaultUserAuthRequirements<
     canWriteInVault: boolean;
     vault: VaultType;
     systemVault: VaultType;
-    plan: PlanType;
     integrations: DataSourceIntegration[];
   }
 >(async (context, auth) => {
@@ -151,7 +149,8 @@ export default function Vault({
     <Page.Vertical gap="xl" align="stretch">
       {vault.kind === "system" && (
         <Page.Header
-          title={"Connection Management"}
+          title="Connection Admin"
+          description="Manage the applications and data Dust has access to."
           icon={CloudArrowLeftRightIcon}
         />
       )}

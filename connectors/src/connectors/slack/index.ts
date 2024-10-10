@@ -11,6 +11,7 @@ import { Err, Ok } from "@dust-tt/types";
 import { WebClient } from "@slack/web-api";
 import PQueue from "p-queue";
 
+import type { ConnectorManagerError } from "@connectors/connectors/interface";
 import { BaseConnectorManager } from "@connectors/connectors/interface";
 import { getChannels } from "@connectors/connectors/slack//temporal/activities";
 import { getBotEnabled } from "@connectors/connectors/slack/bot";
@@ -39,28 +40,24 @@ export class SlackConnectorManager extends BaseConnectorManager<SlackConfigurati
     dataSourceConfig: DataSourceConfig;
     connectionId: string;
     configuration: SlackConfigurationType;
-  }): Promise<Result<string, Error>> {
+  }): Promise<Result<string, ConnectorManagerError>> {
     const slackAccessToken = await getSlackAccessToken(connectionId);
 
     const client = new WebClient(slackAccessToken);
 
     const teamInfo = await client.team.info();
     if (teamInfo.ok !== true) {
-      return new Err(
-        new Error(
-          `Could not get slack team info. Error message: ${
-            teamInfo.error || "unknown"
-          }`
-        )
+      throw new Error(
+        `Could not get slack team info. Error message: ${
+          teamInfo.error || "unknown"
+        }`
       );
     }
     if (!teamInfo.team?.id) {
-      return new Err(
-        new Error(
-          `Could not get slack team id. Error message: ${
-            teamInfo.error || "unknown"
-          }`
-        )
+      throw new Error(
+        `Could not get slack team id. Error message: ${
+          teamInfo.error || "unknown"
+        }`
       );
     }
     const connector = await ConnectorResource.makeNew(
@@ -318,41 +315,57 @@ export class SlackConnectorManager extends BaseConnectorManager<SlackConfigurati
     }[] = [];
 
     try {
-      const [remoteChannels, localChannels] = await Promise.all([
-        getChannels(c.id, false),
-        SlackChannel.findAll({
+      if (filterPermission === "read") {
+        const localChannels = await SlackChannel.findAll({
           where: {
             connectorId: this.connectorId,
+            permission: permissionToFilter,
           },
-        }),
-      ]);
+        });
+        slackChannels.push(
+          ...localChannels.map((channel) => ({
+            slackChannelId: channel.slackChannelId,
+            slackChannelName: channel.slackChannelName,
+            permission: channel.permission,
+          }))
+        );
+      } else {
+        const [remoteChannels, localChannels] = await Promise.all([
+          getChannels(c.id, false),
+          SlackChannel.findAll({
+            where: {
+              connectorId: this.connectorId,
+            },
+          }),
+        ]);
 
-      const localChannelsById = localChannels.reduce(
-        (acc, ch) => {
-          acc[ch.slackChannelId] = ch;
-          return acc;
-        },
-        {} as Record<string, SlackChannel>
-      );
+        const localChannelsById = localChannels.reduce(
+          (acc, ch) => {
+            acc[ch.slackChannelId] = ch;
+            return acc;
+          },
+          {} as Record<string, SlackChannel>
+        );
 
-      for (const remoteChannel of remoteChannels) {
-        if (!remoteChannel.id || !remoteChannel.name) {
-          continue;
-        }
+        for (const remoteChannel of remoteChannels) {
+          if (!remoteChannel.id || !remoteChannel.name) {
+            continue;
+          }
 
-        const permissions =
-          localChannelsById[remoteChannel.id]?.permission ||
-          (remoteChannel.is_member ? "write" : "none");
+          const permissions =
+            localChannelsById[remoteChannel.id]?.permission ||
+            (remoteChannel.is_member ? "write" : "none");
 
-        if (
-          permissionToFilter.length === 0 ||
-          permissionToFilter.includes(permissions)
-        ) {
-          slackChannels.push({
-            slackChannelId: remoteChannel.id,
-            slackChannelName: remoteChannel.name,
-            permission: permissions,
-          });
+          if (
+            permissionToFilter.length === 0 ||
+            permissionToFilter.includes(permissions)
+          ) {
+            slackChannels.push({
+              slackChannelId: remoteChannel.id,
+              slackChannelName: remoteChannel.name,
+              permission: permissions,
+            });
+          }
         }
       }
 

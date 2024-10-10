@@ -108,6 +108,15 @@ export type AgentMessageStatus =
   | "failed"
   | "cancelled";
 
+export const ACTION_RUNNING_LABELS: Record<AgentActionType["type"], string> = {
+  dust_app_run_action: "Running App",
+  process_action: "Extracting data",
+  retrieval_action: "Searching data",
+  tables_query_action: "Querying tables",
+  websearch_action: "Searching the web",
+  browse_action: "Browsing page",
+};
+
 /**
  * Both `action` and `message` are optional (we could have a no-op agent basically).
  *
@@ -161,16 +170,23 @@ export type ConversationVisibility =
   | "test";
 
 /**
+ * A lighter version of Conversation without the content (for menu display).
+ */
+export type ConversationWithoutContentType = {
+  id: ModelId;
+  created: number;
+  owner: WorkspaceType;
+  sId: string;
+  title: string | null;
+  visibility: ConversationVisibility;
+  groupIds: string[];
+};
+
+/**
  * content [][] structure is intended to allow retries (of agent messages) or edits (of user
  * messages).
  */
-export type ConversationType = {
-  id: ModelId;
-  created: number;
-  sId: string;
-  owner: WorkspaceType;
-  title: string | null;
-  visibility: ConversationVisibility;
+export type ConversationType = ConversationWithoutContentType & {
   content: (UserMessageType[] | AgentMessageType[] | ContentFragmentType[])[];
 };
 
@@ -183,18 +199,6 @@ export type AgentParticipant = {
   configurationId: string;
   name: string;
   pictureUrl: string | null;
-};
-
-/**
- * A lighter version of Conversation without the content (for menu display).
- */
-export type ConversationWithoutContentType = {
-  created: number;
-  id: ModelId;
-  owner: WorkspaceType;
-  sId: string;
-  title: string | null;
-  visibility: ConversationVisibility;
 };
 
 export type ParticipantActionType = "posted" | "reacted" | "subscribed";

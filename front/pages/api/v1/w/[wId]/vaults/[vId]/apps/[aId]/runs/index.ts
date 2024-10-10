@@ -75,31 +75,123 @@ function extractUsageFromExecutions(
   }
 }
 
+/**
+ * @swagger
+ * /api/v1/w/{wId}/vaults/{vId}/apps/{aId}/runs:
+ *   post:
+ *     summary: Create an app run
+ *     description: Create and execute a run for an app in the vault specified by {vId}.
+ *     tags:
+ *       - Apps
+ *     security:
+ *       - BearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: wId
+ *         required: true
+ *         description: Unique string identifier for the workspace
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: vId
+ *         required: true
+ *         description: ID of the vault
+ *         schema:
+ *           type: string
+ *       - in: path
+ *         name: aId
+ *         required: true
+ *         description: Unique identifier of the app
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - specification_hash
+ *               - config
+ *               - inputs
+ *             properties:
+ *               specification_hash:
+ *                 type: string
+ *                 description: Hash of the app specification. Ensures API compatibility across app iterations.
+ *               config:
+ *                 type: object
+ *                 description: Configuration for the app run
+ *                 properties:
+ *                   model:
+ *                     type: object
+ *                     description: Model configuration
+ *                     properties:
+ *                       provider_id:
+ *                         type: string
+ *                         description: ID of the model provider
+ *                       model_id:
+ *                         type: string
+ *                         description: ID of the model
+ *                       use_cache:
+ *                         type: boolean
+ *                         description: Whether to use caching
+ *                       use_stream:
+ *                         type: boolean
+ *                         description: Whether to use streaming
+ *               inputs:
+ *                 type: array
+ *                 description: Array of input objects for the app
+ *                 items:
+ *                   type: object
+ *                   additionalProperties: true
+ *               stream:
+ *                 type: boolean
+ *                 description: If true, the response will be streamed
+ *               blocking:
+ *                 type: boolean
+ *                 description: If true, the request will block until the run is complete
+ *               block_filter:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Array of block names to filter the response
+ *     responses:
+ *       200:
+ *         description: App run created and executed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 run:
+ *                   $ref: '#/components/schemas/Run'
+ *       400:
+ *         description: Bad Request. Missing or invalid parameters.
+ *       401:
+ *         description: Unauthorized. Invalid or missing authentication token.
+ *       404:
+ *         description: Workspace or app not found.
+ *       405:
+ *         description: Method not supported.
+ *       500:
+ *         description: Internal Server Error.
+ */
+
 async function handler(
   req: NextApiRequest,
   res: NextApiResponse<WithAPIErrorResponse<PostRunResponseBody>>,
   auth: Authenticator,
   keyAuth: Authenticator
 ): Promise<void> {
+  const owner = auth.getNonNullableWorkspace();
   const keyWorkspaceId = keyAuth.getNonNullableWorkspace().id;
 
-  const owner = auth.workspace();
-  if (!owner) {
-    return apiError(req, res, {
-      status_code: 404,
-      api_error: {
-        type: "workspace_not_found",
-        message: "The workspace was not found.",
-      },
-    });
-  }
-
-  let vaultId = req.query.vId;
-  // Handling the case where vId is undefined to keep support
-  // for the legacy endpoint (not under vault, global vault assumed).
-  if (vaultId === undefined) {
-    const globalVault = await VaultResource.fetchWorkspaceGlobalVault(keyAuth);
-    vaultId = globalVault.sId;
+  // Handling the case where vId is undefined to keep support for the legacy endpoint (not under
+  // vault, global vault assumed for the auth (the authenticator associated with the app, not the
+  // user)).
+  let { vId } = req.query;
+  if (vId === undefined) {
+    vId = (await VaultResource.fetchWorkspaceGlobalVault(auth)).sId;
   }
 
   const [app, providers, secrets] = await Promise.all([
@@ -112,7 +204,7 @@ async function handler(
     getDustAppSecrets(auth, true),
   ]);
 
-  if (!app || app.vault.sId !== vaultId) {
+  if (!app || app.vault.sId !== vId) {
     return apiError(req, res, {
       status_code: 404,
       api_error: {
@@ -407,8 +499,8 @@ async function handler(
         default:
           assertNever(runFlavor);
       }
-
       return;
+
     default:
       return apiError(req, res, {
         status_code: 405,

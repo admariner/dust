@@ -73,7 +73,6 @@ export const VaultCreateAppModal = ({
         body: JSON.stringify({
           name: name.slice(0, MODELS_STRING_MAX_LENGTH),
           description: description.slice(0, MODELS_STRING_MAX_LENGTH),
-          visibility: "private",
         }),
       });
       if (res.ok) {
@@ -121,8 +120,8 @@ export const VaultCreateAppModal = ({
                 placeholder="app_name"
                 name="name"
                 value={name}
-                onChange={(value) => {
-                  setName(value);
+                onChange={(e) => {
+                  setName(e.target.value);
                   if (errors.name) {
                     setErrors({ ...errors, name: null });
                   }
@@ -142,9 +141,9 @@ export const VaultCreateAppModal = ({
               <TextArea
                 placeholder="This description guides assistants in understanding how to use
                 your app effectively and determines its relevance in responding to user inquiries."
-                value={description}
-                onChange={(value) => {
-                  setDescription(value);
+                value={description ?? ""}
+                onChange={(e) => {
+                  setDescription(e.target.value);
                   if (errors.description) {
                     setErrors({ ...errors, description: null });
                   }

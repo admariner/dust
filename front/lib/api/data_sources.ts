@@ -15,9 +15,11 @@ import {
   CoreAPI,
   dustManagedCredentials,
   Err,
+  MANAGED_DS_DELETABLE,
   Ok,
   sectionFullText,
 } from "@dust-tt/types";
+import assert from "assert";
 import type { Transaction } from "sequelize";
 
 import { default as apiConfig, default as config } from "@app/lib/api/config";
@@ -32,10 +34,6 @@ import { enqueueUpsertTable } from "@app/lib/upsert_queue";
 import { validateUrl } from "@app/lib/utils";
 import logger from "@app/logger/logger";
 import { launchScrubDataSourceWorkflow } from "@app/poke/temporal/client";
-
-export const MANAGED_DS_DELETABLE_AS_BUILDER: ConnectorProvider[] = [
-  "webcrawler",
-];
 
 export async function getDataSources(
   auth: Authenticator,
@@ -57,7 +55,10 @@ export async function getDataSources(
   });
 }
 
-export async function deleteDataSource(
+/**
+ * Soft delete a data source. This will mark the data source as deleted and will trigger a scrubbing.
+ */
+export async function softDeleteDataSourceAndLaunchScrubWorkflow(
   auth: Authenticator,
   dataSource: DataSourceResource,
   transaction?: Transaction
@@ -73,11 +74,28 @@ export async function deleteDataSource(
     });
   }
 
-  const dustAPIProjectId = dataSource.dustAPIProjectId;
+  await dataSource.delete(auth, { transaction, hardDelete: false });
 
+  // The scrubbing workflow will delete associated resources and hard delete the data source.
+  await launchScrubDataSourceWorkflow(owner, dataSource);
+
+  return new Ok(dataSource.toJSON());
+}
+
+/**
+ * Performs a hard deletion of the specified data source, ensuring complete removal of the data
+ * source and all its associated resources, including any existing connectors.
+ */
+export async function hardDeleteDataSource(
+  auth: Authenticator,
+  dataSource: DataSourceResource
+) {
+  assert(auth.isBuilder(), "Only builders can delete data sources.");
+
+  const { dustAPIProjectId } = dataSource;
   if (dataSource.connectorId && dataSource.connectorProvider) {
     if (
-      !MANAGED_DS_DELETABLE_AS_BUILDER.includes(dataSource.connectorProvider) &&
+      !MANAGED_DS_DELETABLE.includes(dataSource.connectorProvider) &&
       !auth.isAdmin()
     ) {
       return new Err({
@@ -122,17 +140,11 @@ export async function deleteDataSource(
     }
   }
 
-  await dataSource.delete(auth, transaction);
+  await dataSource.delete(auth, { hardDelete: true });
 
-  await launchScrubDataSourceWorkflow({
-    wId: owner.sId,
-    dustAPIProjectId,
-  });
   if (dataSource.connectorProvider) {
     await warnPostDeletion(auth, dataSource.connectorProvider);
   }
-
-  return new Ok(dataSource.toJSON());
 }
 
 async function warnPostDeletion(
@@ -150,6 +162,7 @@ async function warnPostDeletion(
         await sendGithubDeletionEmail(email);
       }
       break;
+
     default:
       break;
   }

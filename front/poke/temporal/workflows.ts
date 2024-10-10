@@ -8,22 +8,36 @@ const activityProxies = proxyActivities<typeof activities>({
 });
 
 const {
-  scrubDataSourceActivity,
-  isWorkflowDeletableActivity,
-  deleteConversationsActivity,
   deleteAgentsActivity,
   deleteAppsActivity,
-  deleteRunOnDustAppsActivity,
+  deleteConversationsActivity,
   deleteMembersActivity,
+  deleteRunOnDustAppsActivity,
+  deleteVaultsActivity,
   deleteWorkspaceActivity,
+  isWorkflowDeletableActivity,
+  scrubDataSourceActivity,
+  scrubVaultActivity,
 } = activityProxies;
 
 export async function scrubDataSourceWorkflow({
-  dustAPIProjectId,
+  dataSourceId,
+  workspaceId,
 }: {
-  dustAPIProjectId: string;
+  dataSourceId: string;
+  workspaceId: string;
 }) {
-  await scrubDataSourceActivity({ dustAPIProjectId });
+  await scrubDataSourceActivity({ dataSourceId, workspaceId });
+}
+
+export async function scrubVaultWorkflow({
+  vaultId,
+  workspaceId,
+}: {
+  vaultId: string;
+  workspaceId: string;
+}) {
+  await scrubVaultActivity({ vaultId, workspaceId });
 }
 
 export async function deleteWorkspaceWorkflow({
@@ -40,5 +54,6 @@ export async function deleteWorkspaceWorkflow({
   await deleteAppsActivity({ workspaceId });
   await deleteRunOnDustAppsActivity({ workspaceId });
   await deleteMembersActivity({ workspaceId });
+  await deleteVaultsActivity({ workspaceId });
   await deleteWorkspaceActivity({ workspaceId });
 }

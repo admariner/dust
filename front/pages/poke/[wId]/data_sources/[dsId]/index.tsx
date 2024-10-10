@@ -231,10 +231,8 @@ export const getServerSideProps = withSuperUserAuthRequirements<{
     owner.sId
   );
   const groupsForSlackBot = (
-    await GroupResource.listWorkspaceGroups(authForSlackBot)
-  )
-    .filter((g) => !g.isSystem())
-    .map((g) => g.toJSON());
+    await GroupResource.listAllWorkspaceGroups(authForSlackBot)
+  ).map((g) => g.toJSON());
 
   return {
     props: {
@@ -362,6 +360,7 @@ const DataSourcePage = ({
                 <SlackChannelPatternInput
                   initialValue={features.autoReadChannelPattern || ""}
                   owner={owner}
+                  dataSource={dataSource}
                 />
               </div>
             </>
@@ -638,9 +637,8 @@ function NotionUrlCheckOrFind({
         <div className="grow">
           <Input
             placeholder="Notion URL"
-            onChange={setNotionUrl}
+            onChange={(e) => setNotionUrl(e.target.value)}
             value={notionUrl}
-            name={""}
           />
         </div>
         <Button
@@ -850,12 +848,13 @@ function SlackWhitelistBot({
     <div className="mb-2 flex flex-col gap-2 rounded-md border px-2 py-2 text-sm text-gray-600">
       <div className="flex items-center gap-2">
         <div>Whitelist slack bot or workflow</div>
+      </div>
+      <div className="flex items-center gap-2">
         <div className="grow">
           <Input
-            placeholder="Bot or workflow name"
-            onChange={setBotName}
+            placeholder={`Bot or workflow name`}
+            onChange={(e) => setBotName(e.target.value)}
             value={botName}
-            name={""}
           />
         </div>
         <div>

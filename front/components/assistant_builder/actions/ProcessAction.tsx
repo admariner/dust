@@ -160,11 +160,10 @@ function PropertiesFields({
                 <div className="col-span-2">
                   <Input
                     placeholder="Name"
-                    size="sm"
                     name={`name-${index}`}
                     value={prop["name"]}
-                    onChange={(v) => {
-                      handlePropertyChange(index, "name", v);
+                    onChange={(e) => {
+                      handlePropertyChange(index, "name", e.target.value);
                     }}
                     disabled={readOnly}
                     error={
@@ -182,11 +181,14 @@ function PropertiesFields({
                 <div className="col-span-7">
                   <Input
                     placeholder="Description"
-                    size="sm"
                     name={`description-${index}`}
                     value={prop["description"]}
-                    onChange={(v) => {
-                      handlePropertyChange(index, "description", v);
+                    onChange={(e) => {
+                      handlePropertyChange(
+                        index,
+                        "description",
+                        e.target.value
+                      );
                     }}
                     disabled={readOnly}
                     error={
@@ -199,7 +201,7 @@ function PropertiesFields({
 
                 <div className="col-span-2">
                   <DropdownMenu>
-                    <DropdownMenu.Button tooltipPosition="above">
+                    <DropdownMenu.Button tooltipPosition="top">
                       <Button
                         type="select"
                         labelVisible={true}
@@ -449,14 +451,13 @@ export function ActionProcess({
                 <div className="flex">
                   <Input
                     placeholder="Enter tag"
-                    size="sm"
                     name="tags"
                     value={t}
-                    onChange={(v) => {
+                    onChange={(e) => {
                       setEdited(true);
                       updateAction((previousAction) => {
                         const tags = [...(previousAction.tagsFilter?.in || [])];
-                        tags[i] = v;
+                        tags[i] = e.target.value;
 
                         return {
                           ...previousAction,
@@ -524,7 +525,7 @@ export function ActionProcess({
           <TextArea
             placeholder={"Extract the list of…"}
             value={description}
-            onChange={onDescriptionChange}
+            onChange={(e) => onDescriptionChange(e.target.value)}
           />
         </div>
       )}
@@ -558,7 +559,7 @@ export function ActionProcess({
           }}
         />
         <DropdownMenu>
-          <DropdownMenu.Button tooltipPosition="above">
+          <DropdownMenu.Button tooltipPosition="top">
             <Button
               type="select"
               labelVisible={true}
@@ -601,16 +602,17 @@ export function ActionProcess({
                 label={
                   "Automatically re-generate the extraction schema based on Instructions"
                 }
-              >
-                <Button
-                  label={"Re-generate from Instructions"}
-                  variant="tertiary"
-                  icon={SparklesIcon}
-                  size="xs"
-                  disabled={isGeneratingSchema}
-                  onClick={generateSchemaFromInstructions}
-                />
-              </Tooltip>
+                trigger={
+                  <Button
+                    label="Re-generate from Instructions"
+                    variant="tertiary"
+                    icon={SparklesIcon}
+                    size="xs"
+                    disabled={isGeneratingSchema}
+                    onClick={generateSchemaFromInstructions}
+                  />
+                }
+              />
             </div>
           )}
         </div>

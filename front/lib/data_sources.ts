@@ -57,15 +57,35 @@ export function isWebsite(
   return ds.connectorProvider === "webcrawler";
 }
 
+export function isManagedConnectorProvider(
+  connectorProvider: ConnectorProvider
+) {
+  return connectorProvider !== "webcrawler";
+}
+
 export function isManaged(ds: DataSource): ds is DataSource & WithConnector {
-  return ds.connectorProvider !== null && !isWebsite(ds);
+  return (
+    ds.connectorProvider !== null &&
+    isManagedConnectorProvider(ds.connectorProvider)
+  );
+}
+
+export function isRemoteDatabase(
+  ds: DataSource
+): ds is DataSource & WithConnector & { connectorProvider: "snowflake" } {
+  return ds.connectorProvider === "snowflake";
 }
 
 const STRUCTURED_DATA_SOURCES: ConnectorProvider[] = [
   "google_drive",
   "notion",
   "microsoft",
+  "snowflake",
 ];
+
+export function supportsDocumentsData(ds: DataSource): boolean {
+  return !isRemoteDatabase(ds);
+}
 
 export function supportsStructuredData(ds: DataSource): boolean {
   return Boolean(
@@ -88,13 +108,5 @@ export function canBeExpanded(
 }
 
 export function getDataSourceNameFromView(dsv: DataSourceViewType): string {
-  return getDataSourceName(dsv.dataSource);
-}
-
-export function getDataSourceName(ds: DataSourceType): string {
-  if (isManaged(ds)) {
-    return CONNECTOR_CONFIGURATIONS[ds.connectorProvider].name;
-  }
-
-  return ds.name;
+  return getDisplayNameForDataSource(dsv.dataSource);
 }

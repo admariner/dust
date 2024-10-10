@@ -396,19 +396,7 @@ const handleDataSourceWithProvider = async ({
       vault
     );
 
-  const dataSource = dataSourceView.dataSource;
-
-  // If the data source resides in the system vault, we also create a custom view in the global vault until vault are released.
-  if (dataSource.vault.isSystem()) {
-    const globalVault = await VaultResource.fetchWorkspaceGlobalVault(auth);
-
-    await DataSourceViewResource.createViewInVaultFromDataSourceIncludingAllDocuments(
-      auth,
-      globalVault,
-      dataSource,
-      "custom"
-    );
-  }
+  const { dataSource } = dataSourceView;
 
   const connectorsAPI = new ConnectorsAPI(
     config.getConnectorsAPIConfig(),
@@ -431,7 +419,10 @@ const handleDataSourceWithProvider = async ({
       },
       "Failed to create the connector"
     );
-    await dataSource.delete(auth);
+
+    // Rollback the data source creation.
+    await dataSource.delete(auth, { hardDelete: true });
+
     const deleteRes = await coreAPI.deleteDataSource({
       projectId: dustProject.value.project.project_id.toString(),
       dataSourceId: dustDataSource.value.data_source.data_source_id,
@@ -444,14 +435,28 @@ const handleDataSourceWithProvider = async ({
         "Failed to delete the data source"
       );
     }
-    return apiError(req, res, {
-      status_code: 500,
-      api_error: {
-        type: "internal_server_error",
-        message: "Failed to create the connector.",
-        connectors_error: connectorsRes.error,
-      },
-    });
+
+    switch (connectorsRes.error.type) {
+      case "authorization_error":
+      case "invalid_request_error":
+        return apiError(req, res, {
+          status_code: 400,
+          api_error: {
+            type: "invalid_request_error",
+            message: "Failed to create the connector.",
+            connectors_error: connectorsRes.error,
+          },
+        });
+      default:
+        return apiError(req, res, {
+          status_code: 500,
+          api_error: {
+            type: "internal_server_error",
+            message: "Failed to create the connector.",
+            connectors_error: connectorsRes.error,
+          },
+        });
+    }
   }
 
   await dataSource.setConnectorId(connectorsRes.value.id);
@@ -530,8 +535,7 @@ const handleDataSourceWithoutProvider = async ({
       status_code: 400,
       api_error: {
         type: "invalid_request_error",
-        message:
-          "Data source names must only contain letters, numbers, and the characters `._-`, and cannot be empty.",
+        message: "Data source names cannot be empty.",
       },
     });
   }

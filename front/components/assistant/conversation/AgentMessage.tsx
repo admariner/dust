@@ -7,8 +7,8 @@ import {
   ClipboardIcon,
   ContentMessage,
   DocumentDuplicateIcon,
-  DropdownMenu,
   EyeIcon,
+  Popover,
 } from "@dust-tt/sparkle";
 import type {
   AgentActionSpecificEvent,
@@ -176,7 +176,8 @@ export function AgentMessage({
       case "retrieval_params":
       case "dust_app_run_params":
       case "dust_app_run_block":
-      case "tables_query_params":
+      case "tables_query_started":
+      case "tables_query_model_output":
       case "tables_query_output":
       case "process_params":
       case "websearch_params":
@@ -505,7 +506,11 @@ export function AgentMessage({
 
     return (
       <div className="flex flex-col gap-y-4">
-        <AgentMessageActions agentMessage={agentMessage} size={size} />
+        <AgentMessageActions
+          agentMessage={agentMessage}
+          size={size}
+          owner={owner}
+        />
 
         {agentMessage.chainOfThought?.length ? (
           <ContentMessage
@@ -664,36 +669,34 @@ function ErrorMessage({
           label={"ERROR: " + shortText(error.message)}
           size="xs"
         />
-        <DropdownMenu>
-          <DropdownMenu.Button>
+        <Popover
+          trigger={
             <Button
               variant="tertiary"
               size="xs"
               icon={EyeIcon}
               label="See the error"
             />
-          </DropdownMenu.Button>
-          <div className="relative bottom-6 z-30">
-            <DropdownMenu.Items origin="topLeft" width={320}>
-              <div className="flex flex-col gap-3">
-                <div className="text-sm font-normal text-warning-800">
-                  {fullMessage}
-                </div>
-                <div className="self-end">
-                  <Button
-                    variant="tertiary"
-                    size="xs"
-                    icon={DocumentDuplicateIcon}
-                    label={"Copy"}
-                    onClick={() =>
-                      void navigator.clipboard.writeText(fullMessage)
-                    }
-                  />
-                </div>
+          }
+          content={
+            <div className="flex flex-col gap-3">
+              <div className="text-sm font-normal text-warning-800">
+                {fullMessage}
               </div>
-            </DropdownMenu.Items>
-          </div>
-        </DropdownMenu>
+              <div className="self-end">
+                <Button
+                  variant="tertiary"
+                  size="xs"
+                  icon={DocumentDuplicateIcon}
+                  label={"Copy"}
+                  onClick={() =>
+                    void navigator.clipboard.writeText(fullMessage)
+                  }
+                />
+              </div>
+            </div>
+          }
+        />
       </div>
       <div>
         <Button

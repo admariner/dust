@@ -14,7 +14,7 @@ import { uniq } from "lodash";
 import type { NextApiRequest, NextApiResponse } from "next";
 
 import { getDataSourceViewsUsageByCategory } from "@app/lib/api/agent_data_sources";
-import { deleteVault } from "@app/lib/api/vaults";
+import { softDeleteVaultAndLaunchScrubWorkflow } from "@app/lib/api/vaults";
 import { withSessionAuthenticationForWorkspace } from "@app/lib/api/wrappers";
 import type { Authenticator } from "@app/lib/auth";
 import { AppResource } from "@app/lib/resources/app_resource";
@@ -122,19 +122,18 @@ async function handler(
     }
 
     case "PATCH": {
-      if (!auth.isAdmin() || !auth.isBuilder()) {
+      if (!auth.isAdmin()) {
         // Only admins, or builders who have access to the vault, can patch
         return apiError(req, res, {
           status_code: 403,
           api_error: {
             type: "workspace_auth_error",
-            message:
-              "Only users that are `admins` or `builder` can administrate vaults.",
+            message: "Only admins can administrate vaults.",
           },
         });
       }
-      const bodyValidation = PatchVaultRequestBodySchema.decode(req.body);
 
+      const bodyValidation = PatchVaultRequestBodySchema.decode(req.body);
       if (isLeft(bodyValidation)) {
         const pathError = reporter.formatValidationErrors(bodyValidation.left);
 
@@ -166,11 +165,11 @@ async function handler(
         for (const dataSourceConfig of content) {
           const view = viewByDataSourceId[dataSourceConfig.dataSourceId];
           if (view) {
-            // Update existing view
+            // Update existing view.
             await view.updateParents(dataSourceConfig.parentsIn);
             await view.setEditedBy(auth);
           } else {
-            // Create a new view
+            // Create a new view.
             const dataSource = await DataSourceResource.fetchById(
               auth,
               dataSourceConfig.dataSourceId
@@ -189,7 +188,9 @@ async function handler(
         for (const dataSourceId of Object.keys(viewByDataSourceId)) {
           if (!content.map((c) => c.dataSourceId).includes(dataSourceId)) {
             const view = viewByDataSourceId[dataSourceId];
-            await view.delete(auth);
+
+            // Hard delete previous views.
+            await view.delete(auth, { hardDelete: true });
           }
         }
       }
@@ -201,7 +202,7 @@ async function handler(
 
     case "DELETE": {
       if (!auth.isAdmin()) {
-        // Only admins, who have access to the vault, can delete
+        // Only admins, who have access to the vault, can delete.
         return apiError(req, res, {
           status_code: 403,
           api_error: {
@@ -213,7 +214,19 @@ async function handler(
       }
 
       try {
-        await deleteVault(auth, vault);
+        const deleteRes = await softDeleteVaultAndLaunchScrubWorkflow(
+          auth,
+          vault
+        );
+        if (deleteRes.isErr()) {
+          return apiError(req, res, {
+            status_code: 400,
+            api_error: {
+              type: "invalid_request_error",
+              message: deleteRes.error.message,
+            },
+          });
+        }
       } catch (e: any) {
         return apiError(req, res, {
           status_code: 500,

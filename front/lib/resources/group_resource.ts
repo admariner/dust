@@ -25,6 +25,7 @@ import { MembershipResource } from "@app/lib/resources/membership_resource";
 import { GroupMembershipModel } from "@app/lib/resources/storage/models/group_memberships";
 import { GroupVaultModel } from "@app/lib/resources/storage/models/group_vaults";
 import { GroupModel } from "@app/lib/resources/storage/models/groups";
+import { KeyModel } from "@app/lib/resources/storage/models/keys";
 import type { ReadonlyAttributesType } from "@app/lib/resources/storage/types";
 import { getResourceIdFromSId, makeSId } from "@app/lib/resources/string_ids";
 import type { ResourceFindOptions } from "@app/lib/resources/types";
@@ -120,15 +121,29 @@ export class GroupResource extends BaseResource<GroupModel> {
   static async listWorkspaceGroupsFromKey(
     key: KeyResource
   ): Promise<GroupResource[]> {
-    // TODO(GROUPS_INFRA): we need to pull the groups associated with the key once that's built.
-    const groups = await this.model.findAll({
-      where: {
-        workspaceId: key.workspaceId,
+    let whereCondition: WhereOptions<GroupModel> = {
+      workspaceId: key.workspaceId,
+    };
+
+    // If the key is a system key, we also include the global group.
+    if (key.isSystem) {
+      whereCondition = {
+        ...whereCondition,
         [Op.or]: [
-          { kind: key.isSystem ? ["system", "global"] : "global" },
+          { kind: { [Op.in]: ["system", "global"] } },
           { id: key.groupId },
         ],
-      },
+      };
+    } else {
+      // If it's not a system key, we only fetch the associated group.
+      whereCondition = {
+        ...whereCondition,
+        id: key.groupId,
+      };
+    }
+
+    const groups = await this.model.findAll({
+      where: whereCondition,
     });
 
     if (groups.length === 0) {
@@ -160,7 +175,7 @@ export class GroupResource extends BaseResource<GroupModel> {
 
   static async internalFetchWorkspaceGlobalGroup(
     workspaceId: ModelId
-  ): Promise<GroupResource> {
+  ): Promise<GroupResource | null> {
     const group = await this.model.findOne({
       where: {
         workspaceId,
@@ -169,7 +184,7 @@ export class GroupResource extends BaseResource<GroupModel> {
     });
 
     if (!group) {
-      throw new Error("Global group not found.");
+      return null;
     }
 
     return new this(GroupModel, group.get());
@@ -310,12 +325,16 @@ export class GroupResource extends BaseResource<GroupModel> {
     return new Ok(group);
   }
 
-  static async listWorkspaceGroups(
-    auth: Authenticator
+  static async listAllWorkspaceGroups(
+    auth: Authenticator,
+    options: { includeSystem?: boolean } = {}
   ): Promise<GroupResource[]> {
+    const { includeSystem } = options;
     const groups = await this.baseFetch(auth, {});
 
-    return groups.filter((group) => group.canRead(auth));
+    return groups
+      .filter((group) => group.canRead(auth))
+      .filter((group) => includeSystem || !group.isSystem());
   }
 
   static async listUserGroupsInWorkspace({
@@ -374,7 +393,6 @@ export class GroupResource extends BaseResource<GroupModel> {
     let memberships: GroupMembershipModel[] | MembershipResource[];
 
     // The global group does not have a DB entry for each workspace member.
-    // TODO(GROUPS_INFRA): Remove this once we consolidate memberships with group memberships.
     if (this.isGlobal()) {
       const { memberships: m } = await MembershipResource.getActiveMemberships({
         workspace: auth.getNonNullableWorkspace(),
@@ -618,9 +636,17 @@ export class GroupResource extends BaseResource<GroupModel> {
 
   async delete(
     auth: Authenticator,
-    transaction?: Transaction
+    { transaction }: { transaction?: Transaction } = {}
   ): Promise<Result<undefined, Error>> {
     try {
+      await KeyModel.destroy({
+        where: {
+          groupId: this.id,
+          workspaceId: auth.getNonNullableWorkspace().id,
+        },
+        transaction,
+      });
+
       await GroupVaultModel.destroy({
         where: {
           groupId: this.id,
@@ -646,78 +672,6 @@ export class GroupResource extends BaseResource<GroupModel> {
     } catch (err) {
       return new Err(err as Error);
     }
-  }
-
-  static async deleteAllForWorkspace(
-    workspace: LightWorkspaceType,
-    transaction?: Transaction
-  ) {
-    const groups = await this.model.findAll({
-      attributes: ["id"],
-      where: { workspaceId: workspace.id },
-      transaction,
-    });
-
-    const groupIds = groups.map((group) => group.id);
-
-    await GroupVaultModel.destroy({
-      where: {
-        groupId: {
-          [Op.in]: groupIds,
-        },
-      },
-      transaction,
-    });
-    await GroupMembershipModel.destroy({
-      where: {
-        groupId: {
-          [Op.in]: groupIds,
-        },
-      },
-      transaction,
-    });
-    await this.model.destroy({
-      where: {
-        id: {
-          [Op.in]: groupIds,
-        },
-      },
-      transaction,
-    });
-  }
-
-  static async deleteAllForWorkspaceExceptDefaults(auth: Authenticator) {
-    const workspaceId = auth.getNonNullableWorkspace().id;
-
-    const groups = await this.model.findAll({
-      attributes: ["id"],
-      where: {
-        workspaceId,
-        kind: {
-          [Op.notIn]: ["system", "global"],
-        },
-      },
-    });
-
-    const groupIds = groups.map((group) => group.id);
-
-    await GroupMembershipModel.destroy({
-      where: {
-        workspaceId,
-        groupId: {
-          [Op.in]: groupIds,
-        },
-      },
-    });
-
-    await this.model.destroy({
-      where: {
-        id: {
-          [Op.in]: groupIds,
-        },
-        workspaceId,
-      },
-    });
   }
 
   // Permissions

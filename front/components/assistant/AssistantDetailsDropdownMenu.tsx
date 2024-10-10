@@ -17,20 +17,20 @@ import type {
   WorkspaceType,
 } from "@dust-tt/types";
 import { assertNever, isBuilder } from "@dust-tt/types";
-import { useContext, useState } from "react";
+import { useRouter } from "next/router";
+import { useState } from "react";
 
-import { DeleteAssistantDialog } from "@app/components/assistant/AssistantActions";
-import { SendNotificationsContext } from "@app/components/sparkle/Notification";
-import { updateAgentUserListStatus } from "@app/lib/client/dust_api";
-import { useAgentConfiguration } from "@app/lib/swr/assistants";
+import { DeleteAssistantDialog } from "@app/components/assistant/DeleteAssistantDialog";
+import { useUpdateAgentUserListStatus } from "@app/lib/swr/assistants";
 import { useUser } from "@app/lib/swr/user";
+import { setQueryParam } from "@app/lib/utils/router";
 
 interface AssistantDetailsDropdownMenuProps {
   agentConfiguration: LightAgentConfigurationType;
   owner: WorkspaceType;
   variant?: "button" | "plain";
   canDelete?: boolean;
-  showAssistantDetails?: () => void;
+  isMoreInfoVisible?: boolean;
   showAddRemoveToList?: boolean;
 }
 
@@ -39,20 +39,17 @@ export function AssistantDetailsDropdownMenu({
   owner,
   variant = "plain",
   canDelete,
-  showAssistantDetails,
+  isMoreInfoVisible,
   showAddRemoveToList = false,
 }: AssistantDetailsDropdownMenuProps) {
   const [isUpdatingList, setIsUpdatingList] = useState(false);
-  const sendNotification = useContext(SendNotificationsContext);
   const { user } = useUser();
-  const { mutateAgentConfiguration } = useAgentConfiguration({
-    workspaceId: owner.sId,
+  const doAgentListStatusUpdate = useUpdateAgentUserListStatus({
+    owner,
     agentConfigurationId: agentConfiguration.sId,
-    disabled: true,
   });
-
-  const [showDeletionModal, setShowDeletionModal] =
-    useState<LightAgentConfigurationType | null>(null);
+  const router = useRouter();
+  const [showDeletionModal, setShowDeletionModal] = useState(false);
 
   if (
     !agentConfiguration ||
@@ -71,34 +68,7 @@ export function AssistantDetailsDropdownMenu({
 
   const updateAgentUserList = async (listStatus: AgentUserListStatus) => {
     setIsUpdatingList(true);
-
-    const { success, errorMessage } = await updateAgentUserListStatus({
-      listStatus,
-      owner,
-      agentConfigurationId: agentConfiguration.sId,
-    });
-
-    if (success) {
-      sendNotification({
-        title: `Assistant ${
-          listStatus === "in-list"
-            ? "added to your list"
-            : "removed from your list"
-        }`,
-        type: "success",
-      });
-
-      await mutateAgentConfiguration();
-    } else {
-      sendNotification({
-        title: `Error ${
-          listStatus === "in-list" ? "adding" : "removing"
-        } Assistant`,
-        description: errorMessage,
-        type: "error",
-      });
-    }
-
+    await doAgentListStatusUpdate(listStatus);
     setIsUpdatingList(false);
   };
 
@@ -126,15 +96,15 @@ export function AssistantDetailsDropdownMenu({
 
   return (
     <>
-      {allowDeletion && showDeletionModal && (
-        <DeleteAssistantDialog
-          owner={owner}
-          agentConfiguration={showDeletionModal}
-          show={!!showDeletionModal}
-          onClose={() => setShowDeletionModal(null)}
-          isPrivateAssistant={showDeletionModal.scope === "private"}
-        />
-      )}
+      <DeleteAssistantDialog
+        owner={owner}
+        isOpen={showDeletionModal}
+        agentConfiguration={agentConfiguration}
+        onClose={() => {
+          setShowDeletionModal(false);
+        }}
+        isPrivateAssistant={agentConfiguration.scope === "private"}
+      />
 
       <DropdownMenu className="text-element-700">
         {({ close }) => (
@@ -142,6 +112,7 @@ export function AssistantDetailsDropdownMenu({
             <DropdownMenu.Button>{dropdownButton}</DropdownMenu.Button>
             {/* TODO: get rid of the hardcoded value */}
             <DropdownMenu.Items width={230}>
+              <DropdownMenu.SectionHeader label={agentConfiguration.name} />
               <DropdownMenu.Item
                 label="Start new conversation"
                 link={{
@@ -153,15 +124,27 @@ export function AssistantDetailsDropdownMenu({
                   close();
                 }}
               />
-              {showAssistantDetails && (
+              {isMoreInfoVisible ? (
                 <DropdownMenu.Item
-                  label={`More about @${agentConfiguration.name}`}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    close();
-                    showAssistantDetails();
-                  }}
+                  label="More info"
+                  onClick={() =>
+                    setQueryParam(
+                      router,
+                      "assistantDetails",
+                      agentConfiguration.sId
+                    )
+                  }
                   icon={EyeIcon}
+                />
+              ) : (
+                <DropdownMenu.Item
+                  label={`Copy assistant ID`}
+                  onClick={async (e) => {
+                    e.stopPropagation();
+                    await navigator.clipboard.writeText(agentConfiguration.sId);
+                    close();
+                  }}
+                  icon={ClipboardIcon}
                 />
               )}
               {!isGlobalAgent && (
@@ -199,12 +182,14 @@ export function AssistantDetailsDropdownMenu({
                       close();
                     }}
                   />
-                  {canDelete && (
+                  {allowDeletion && (
                     <DropdownMenu.Item
                       label="Delete"
                       icon={TrashIcon}
                       variant="warning"
-                      onClick={() => setShowDeletionModal(agentConfiguration)}
+                      onClick={() => {
+                        setShowDeletionModal(true);
+                      }}
                     />
                   )}
 

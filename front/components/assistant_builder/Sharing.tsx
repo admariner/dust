@@ -3,20 +3,23 @@ import {
   Button,
   ChevronDownIcon,
   Chip,
+  CompanyIcon,
   Dialog,
   DropdownMenu,
   DustIcon,
   IconButton,
   LockIcon,
   Page,
-  PlanetIcon,
+  PopoverContent,
+  PopoverRoot,
+  PopoverTrigger,
   SliderToggle,
   UserGroupIcon,
 } from "@dust-tt/sparkle";
 import type {
   AgentConfigurationScope,
   AgentConfigurationType,
-  DataSourceViewType,
+  DataSourceType,
   WorkspaceType,
 } from "@dust-tt/types";
 import { isBuilder } from "@dust-tt/types";
@@ -41,7 +44,7 @@ export const SCOPE_INFO: Record<
     shortLabel: string;
     label: string;
     color: "pink" | "amber" | "sky" | "slate";
-    icon: typeof UserGroupIcon | typeof PlanetIcon | typeof LockIcon;
+    icon: typeof UserGroupIcon | typeof CompanyIcon | typeof LockIcon;
     text: string;
     confirmationModalData: ConfirmationModalDataType | null;
   }
@@ -50,7 +53,7 @@ export const SCOPE_INFO: Record<
     shortLabel: "Company",
     label: "Company Assistant",
     color: "amber",
-    icon: PlanetIcon,
+    icon: CompanyIcon,
     text: "Activated by default for all members of the workspace.",
     confirmationModalData: {
       title: "Moving to Company Assistants",
@@ -109,7 +112,7 @@ interface SharingButtonProps {
   setNewScope: (scope: NonGlobalScope) => void;
   showSlackIntegration: boolean;
   slackChannelSelected: SlackChannel[];
-  slackDataSourceView: DataSourceViewType | null;
+  slackDataSource: DataSourceType | undefined;
 }
 
 export function SharingButton({
@@ -123,8 +126,9 @@ export function SharingButton({
   setNewScope,
   showSlackIntegration,
   slackChannelSelected,
-  slackDataSourceView,
+  slackDataSource,
 }: SharingButtonProps) {
+  const [isPopoverOpen, setIsPopoverOpen] = useState(false);
   const { agentUsage, isAgentUsageLoading, isAgentUsageError } = useAgentUsage({
     workspaceId: owner.sId,
     agentConfigurationId,
@@ -151,10 +155,9 @@ export function SharingButton({
 
   return (
     <>
-      {slackDataSourceView && (
+      {slackDataSource && (
         <SlackAssistantDefaultManager
           existingSelection={slackChannelSelected}
-          slackDataSourceView={slackDataSourceView}
           owner={owner}
           onSave={(slackChannels: SlackChannel[]) => {
             setNewLinkedSlackChannels(slackChannels);
@@ -162,128 +165,128 @@ export function SharingButton({
           assistantHandle="@Dust"
           isAdmin={isAdmin}
           show={slackDrawerOpened}
+          slackDataSource={slackDataSource}
           onClose={() => setSlackDrawerOpened(false)}
         />
       )}
-      <DropdownMenu>
-        {({ close }) => (
-          <>
-            <DropdownMenu.Button>
-              <Button
-                size="sm"
-                label="Sharing"
-                icon={ArrowUpOnSquareIcon}
-                variant="tertiary"
-                type="menu"
+      <PopoverRoot open={isPopoverOpen} onOpenChange={setIsPopoverOpen}>
+        <PopoverTrigger>
+          <Button
+            size="sm"
+            label="Sharing"
+            icon={ArrowUpOnSquareIcon}
+            variant="tertiary"
+            type="menu"
+            onClick={() => setIsPopoverOpen(!isPopoverOpen)}
+          />
+        </PopoverTrigger>
+        <PopoverContent>
+          <div className="flex flex-col gap-y-2 py-1">
+            <div className="flex flex-col gap-y-3">
+              <SharingDropdown
+                owner={owner}
+                agentConfiguration={agentConfiguration}
+                initialScope={initialScope}
+                newScope={newScope}
+                setNewScope={setNewScope}
               />
-            </DropdownMenu.Button>
-            <DropdownMenu.Items width={300} overflow="visible">
-              <div className="flex flex-col gap-y-2 py-1">
-                <div className="flex flex-col gap-y-3">
-                  <SharingDropdown
-                    owner={owner}
-                    agentConfiguration={agentConfiguration}
-                    initialScope={initialScope}
-                    newScope={newScope}
-                    setNewScope={setNewScope}
-                  />
-                  <div className="text-sm text-element-700">
-                    <div>
-                      {SCOPE_INFO[newScope].text}{" "}
-                      {agentUsage && newScope !== "private" ? usageText : null}
+              <div className="text-sm text-element-700">
+                <div>
+                  {SCOPE_INFO[newScope].text}{" "}
+                  {agentUsage && newScope !== "private" ? usageText : null}
+                </div>
+              </div>
+            </div>
+            {showSlackIntegration && (
+              <>
+                <Page.Separator />
+                <div className="flex flex-row justify-between">
+                  <div>
+                    <div className="text-base font-bold text-element-800">
+                      Slack integration
                     </div>
+                    <div className="text-sm text-element-700">
+                      {slackChannelSelected.length === 0 ? (
+                        <>
+                          Set as default assistant for specific&nbsp;channels.
+                        </>
+                      ) : (
+                        <>
+                          Default assistant for{" "}
+                          {slackChannelSelected
+                            .map((c) => c.slackChannelName)
+                            .join(", ")}
+                        </>
+                      )}
+                    </div>
+
+                    {slackChannelSelected.length > 0 && (
+                      <div className="pt-3">
+                        <Button
+                          size="xs"
+                          variant="secondary"
+                          label="Manage channels"
+                          onClick={() => {
+                            setIsPopoverOpen(false);
+                            setSlackDrawerOpened(true);
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  <div className="pt-4">
+                    <SliderToggle
+                      selected={slackChannelSelected.length > 0}
+                      // If not admins, but there are channels selected, prevent from removing.
+                      disabled={
+                        !slackDataSource ||
+                        (slackChannelSelected.length > 0 && !isAdmin)
+                      }
+                      onClick={() => {
+                        if (slackChannelSelected.length > 0) {
+                          setNewLinkedSlackChannels([]);
+                        } else {
+                          setIsPopoverOpen(false);
+                          setSlackDrawerOpened(true);
+                        }
+                      }}
+                    />
                   </div>
                 </div>
-                {showSlackIntegration && (
-                  <>
-                    <Page.Separator />
-                    <div className="flex flex-row justify-between">
-                      <div>
-                        <div className="text-base font-bold text-element-800">
-                          Slack integration
-                        </div>
-                        <div className="text-sm text-element-700">
-                          {slackChannelSelected.length === 0 ? (
-                            <>
-                              Set as default assistant for
-                              specific&nbsp;channels.
-                            </>
-                          ) : (
-                            <>
-                              Default assistant for{" "}
-                              {slackChannelSelected
-                                .map((c) => c.slackChannelName)
-                                .join(", ")}
-                            </>
-                          )}
-                        </div>
-
-                        {slackChannelSelected.length > 0 && (
-                          <div className="pt-3">
-                            <Button
-                              size="xs"
-                              variant="secondary"
-                              label="Manage channels"
-                              onClick={() => {
-                                close();
-                                setSlackDrawerOpened(true);
-                              }}
-                            />
-                          </div>
-                        )}
-                      </div>
-                      <div className="pt-4">
-                        <SliderToggle
-                          selected={slackChannelSelected.length > 0}
-                          // If not admins, but there are channels selected, prevent from removing.
-                          disabled={slackChannelSelected.length > 0 && !isAdmin}
-                          onClick={() => {
-                            if (slackChannelSelected.length > 0) {
-                              setNewLinkedSlackChannels([]);
-                            } else {
-                              close();
-                              setSlackDrawerOpened(true);
-                            }
-                          }}
-                        />
-                      </div>
+              </>
+            )}
+            {agentConfigurationId && (
+              <>
+                <Page.Separator />
+                <div className="flex w-full flex-row">
+                  <div className="grow">
+                    <div className="text-base font-bold text-element-800">
+                      Link
                     </div>
-                  </>
-                )}
-                {agentConfigurationId && (
-                  <>
-                    <Page.Separator />
-                    <div className="flex w-full flex-row">
-                      <div className="grow">
-                        <div className="text-base font-bold text-element-800">
-                          Link
-                        </div>
-                        <div className="text-sm text-element-700">
-                          Shareable direct&nbsp;URL
-                        </div>
-                      </div>
-                      <div className="pt-4 text-right">
-                        <Button
-                          size="sm"
-                          label={copyLinkSuccess ? "Copied!" : "Copy link"}
-                          variant="secondary"
-                          onClick={async () => {
-                            await navigator.clipboard.writeText(shareLink);
-                            setCopyLinkSuccess(true);
-                            setTimeout(() => {
-                              setCopyLinkSuccess(false);
-                            }, 1000);
-                          }}
-                        />
-                      </div>
+                    <div className="text-sm text-element-700">
+                      Shareable direct&nbsp;URL
                     </div>
-                  </>
-                )}
-              </div>
-            </DropdownMenu.Items>
-          </>
-        )}
-      </DropdownMenu>
+                  </div>
+                  <div className="pt-4 text-right">
+                    <Button
+                      size="sm"
+                      label={copyLinkSuccess ? "Copied!" : "Copy link"}
+                      variant="secondary"
+                      onClick={async () => {
+                        await navigator.clipboard.writeText(shareLink);
+                        setCopyLinkSuccess(true);
+                        setTimeout(() => {
+                          setCopyLinkSuccess(false);
+                        }, 1000);
+                      }}
+                    />
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </PopoverContent>
+      </PopoverRoot>
     </>
   );
 }

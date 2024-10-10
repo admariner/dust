@@ -1,5 +1,5 @@
+import { Tree } from "@dust-tt/sparkle";
 import type {
-  ConnectorPermission,
   ContentNodesViewType,
   DataSourceViewType,
   LightWorkspaceType,
@@ -24,7 +24,12 @@ const getUseResourceHook =
       viewType,
     });
     return {
-      resources: res.nodes,
+      resources: res.nodes.map((n) => ({
+        ...n,
+        preventSelection:
+          n.preventSelection ||
+          (viewType === "tables" && n.type !== "database"),
+      })),
       isResourcesLoading: res.isNodesLoading,
       isResourcesError: res.isNodesError,
     };
@@ -32,37 +37,41 @@ const getUseResourceHook =
 
 interface DataSourceViewPermissionTreeProps {
   dataSourceView: DataSourceViewType;
-  onDocumentViewClick: (documentId: string) => void;
-  isSearchEnabled?: boolean;
   isRoundedBackground?: boolean;
+  isSearchEnabled?: boolean;
+  onDocumentViewClick: (documentId: string) => void;
   owner: LightWorkspaceType;
   parentId?: string | null;
-  permissionFilter?: ConnectorPermission;
-  showExpand?: boolean;
-  viewType: ContentNodesViewType;
   selectedNodes?: Record<string, ContentNodeTreeItemStatus>;
   setSelectedNodes?: (
     updater: (
       prev: Record<string, ContentNodeTreeItemStatus>
     ) => Record<string, ContentNodeTreeItemStatus>
   ) => void;
+  showExpand?: boolean;
+  viewType: ContentNodesViewType;
 }
 
 export function DataSourceViewPermissionTree({
   dataSourceView,
-  isSearchEnabled,
   isRoundedBackground,
-  owner,
+  isSearchEnabled,
   onDocumentViewClick,
-  showExpand,
-  viewType,
+  owner,
+  parentId,
   selectedNodes,
   setSelectedNodes,
+  showExpand,
+  viewType,
 }: DataSourceViewPermissionTreeProps) {
   const useResourcesHook = useCallback(
-    (parentId: string | null) =>
-      getUseResourceHook(owner, dataSourceView, viewType)(parentId),
-    [owner, dataSourceView, viewType]
+    (selectedParentId: string | null) =>
+      getUseResourceHook(
+        owner,
+        dataSourceView,
+        viewType
+      )(selectedParentId || parentId || null),
+    [owner, dataSourceView, viewType, parentId]
   );
 
   return (
@@ -74,6 +83,13 @@ export function DataSourceViewPermissionTree({
       useResourcesHook={useResourcesHook}
       selectedNodes={selectedNodes}
       setSelectedNodes={setSelectedNodes}
+      emptyComponent={
+        viewType === "tables" ? (
+          <Tree.Empty label="No tables" />
+        ) : (
+          <Tree.Empty label="No documents" />
+        )
+      }
     />
   );
 }

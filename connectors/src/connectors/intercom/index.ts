@@ -22,6 +22,7 @@ import {
 } from "@connectors/connectors/intercom/lib/help_center_permissions";
 import { getIntercomAccessToken } from "@connectors/connectors/intercom/lib/intercom_access_token";
 import { fetchIntercomWorkspace } from "@connectors/connectors/intercom/lib/intercom_api";
+import { retrieveSelectedNodes } from "@connectors/connectors/intercom/lib/permissions";
 import {
   getHelpCenterArticleIdFromInternalId,
   getHelpCenterArticleInternalId,
@@ -32,12 +33,13 @@ import {
   getTeamIdFromInternalId,
   getTeamInternalId,
   getTeamsInternalId,
-  isInternalIdForAllConversations,
+  isInternalIdForAllTeams,
 } from "@connectors/connectors/intercom/lib/utils";
 import {
   launchIntercomSyncWorkflow,
   stopIntercomSyncWorkflow,
 } from "@connectors/connectors/intercom/temporal/client";
+import type { ConnectorManagerError } from "@connectors/connectors/interface";
 import { BaseConnectorManager } from "@connectors/connectors/interface";
 import { dataSourceConfigFromConnector } from "@connectors/lib/api/data_source_config";
 import {
@@ -58,68 +60,57 @@ export class IntercomConnectorManager extends BaseConnectorManager<null> {
   }: {
     dataSourceConfig: DataSourceConfig;
     connectionId: string;
-  }): Promise<Result<string, Error>> {
+  }): Promise<Result<string, ConnectorManagerError>> {
     const intercomAccessToken = await getIntercomAccessToken(connectionId);
 
     let connector = null;
 
-    try {
-      const intercomWorkspace = await fetchIntercomWorkspace({
-        accessToken: intercomAccessToken,
-      });
-      if (!intercomWorkspace) {
-        return new Err(
-          new Error(
-            "Error retrieving intercom workspace, cannot create Connector."
-          )
-        );
-      }
-
-      const intercomConfigurationBlob = {
-        intercomWorkspaceId: intercomWorkspace.id,
-        name: intercomWorkspace.name,
-        conversationsSlidingWindow: 90,
-        region: intercomWorkspace.region,
-        syncAllConversations: "disabled" as const,
-        shouldSyncNotes: true,
-      };
-
-      connector = await ConnectorResource.makeNew(
-        "intercom",
-        {
-          connectionId,
-          workspaceAPIKey: dataSourceConfig.workspaceAPIKey,
-          workspaceId: dataSourceConfig.workspaceId,
-          dataSourceId: dataSourceConfig.dataSourceId,
-        },
-        intercomConfigurationBlob
+    const intercomWorkspace = await fetchIntercomWorkspace({
+      accessToken: intercomAccessToken,
+    });
+    if (!intercomWorkspace) {
+      throw new Error(
+        "Error retrieving intercom workspace, cannot create Connector."
       );
-
-      const workflowStarted = await launchIntercomSyncWorkflow({
-        connectorId: connector.id,
-      });
-      if (workflowStarted.isErr()) {
-        await connector.delete();
-        logger.error(
-          {
-            workspaceId: dataSourceConfig.workspaceId,
-            error: workflowStarted.error,
-          },
-          "[Intercom] Error creating connector Could not launch sync workflow."
-        );
-        return new Err(workflowStarted.error);
-      }
-      return new Ok(connector.id.toString());
-    } catch (e) {
-      logger.error(
-        { workspaceId: dataSourceConfig.workspaceId, error: e },
-        "[Intercom] Unknown Error creating connector."
-      );
-      if (connector) {
-        await connector.delete();
-      }
-      return new Err(e as Error);
     }
+
+    const intercomConfigurationBlob = {
+      intercomWorkspaceId: intercomWorkspace.id,
+      name: intercomWorkspace.name,
+      conversationsSlidingWindow: 90,
+      region: intercomWorkspace.region,
+      syncAllConversations: "disabled" as const,
+      shouldSyncNotes: true,
+    };
+
+    connector = await ConnectorResource.makeNew(
+      "intercom",
+      {
+        connectionId,
+        workspaceAPIKey: dataSourceConfig.workspaceAPIKey,
+        workspaceId: dataSourceConfig.workspaceId,
+        dataSourceId: dataSourceConfig.dataSourceId,
+      },
+      intercomConfigurationBlob
+    );
+
+    const workflowStarted = await launchIntercomSyncWorkflow({
+      connectorId: connector.id,
+    });
+
+    if (workflowStarted.isErr()) {
+      await connector.delete();
+      logger.error(
+        {
+          workspaceId: dataSourceConfig.workspaceId,
+          error: workflowStarted.error,
+        },
+        "[Intercom] Error creating connector Could not launch sync workflow."
+      );
+      throw workflowStarted.error;
+    }
+
+    return new Ok(connector.id.toString());
   }
 
   async update({
@@ -329,6 +320,14 @@ export class IntercomConnectorManager extends BaseConnectorManager<null> {
       return new Err(new Error("Connector not found"));
     }
 
+    if (filterPermission === "read" && parentInternalId === null) {
+      // We want all selected nodes despite the hierarchy
+      const selectedNodes = await retrieveSelectedNodes({
+        connectorId: this.connectorId,
+      });
+      return new Ok(selectedNodes);
+    }
+
     try {
       const helpCenterNodes = await retrieveIntercomHelpCentersPermissions({
         connectorId: this.connectorId,
@@ -400,7 +399,7 @@ export class IntercomConnectorManager extends BaseConnectorManager<null> {
           this.connectorId,
           id
         );
-        const isAllConversations = isInternalIdForAllConversations(
+        const isAllConversations = isInternalIdForAllTeams(
           this.connectorId,
           id
         );
@@ -560,7 +559,7 @@ export class IntercomConnectorManager extends BaseConnectorManager<null> {
       }
       if (
         !isAllConversations &&
-        isInternalIdForAllConversations(this.connectorId, internalId)
+        isInternalIdForAllTeams(this.connectorId, internalId)
       ) {
         isAllConversations = true;
       }
@@ -694,6 +693,10 @@ export class IntercomConnectorManager extends BaseConnectorManager<null> {
     return new Ok(nodes);
   }
 
+  /**
+   * Retrieves the parent IDs of a content node in hierarchical order.
+   * The first ID is the internal ID of the content node itself.
+   */
   async retrieveContentNodeParents({
     internalId,
   }: {
@@ -706,14 +709,14 @@ export class IntercomConnectorManager extends BaseConnectorManager<null> {
       internalId
     );
     if (helpCenterId) {
-      return new Ok([]);
+      return new Ok([internalId]);
     }
     const teamId = getTeamIdFromInternalId(this.connectorId, internalId);
     if (teamId) {
-      return new Ok([getTeamsInternalId(this.connectorId)]);
+      return new Ok([internalId, getTeamsInternalId(this.connectorId)]);
     }
 
-    const parents: string[] = [];
+    const parents: string[] = [internalId];
     let collection = null;
 
     const collectionId = getHelpCenterCollectionIdFromInternalId(

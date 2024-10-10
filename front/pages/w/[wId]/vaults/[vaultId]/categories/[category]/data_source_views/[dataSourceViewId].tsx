@@ -4,13 +4,12 @@ import type {
   DataSourceType,
   DataSourceViewCategory,
   DataSourceViewType,
-  PlanType,
+  VaultType,
 } from "@dust-tt/types";
 import { ConnectorsAPI } from "@dust-tt/types";
 import type { InferGetServerSidePropsType } from "next";
 import { useRouter } from "next/router";
 import type { ReactElement } from "react";
-import React from "react";
 
 import { VaultDataSourceViewContentList } from "@app/components/vaults/VaultDataSourceViewContentList";
 import type { VaultLayoutProps } from "@app/components/vaults/VaultLayout";
@@ -18,6 +17,7 @@ import { VaultLayout } from "@app/components/vaults/VaultLayout";
 import config from "@app/lib/api/config";
 import { withDefaultUserAuthRequirements } from "@app/lib/iam/session";
 import { DataSourceViewResource } from "@app/lib/resources/data_source_view_resource";
+import { VaultResource } from "@app/lib/resources/vault_resource";
 import logger from "@app/logger/logger";
 
 export const getServerSideProps = withDefaultUserAuthRequirements<
@@ -28,7 +28,7 @@ export const getServerSideProps = withDefaultUserAuthRequirements<
     canWriteInVault: boolean;
     canReadInVault: boolean;
     parentId?: string;
-    plan: PlanType;
+    systemVault: VaultType;
     connector: ConnectorType | null;
   }
 >(async (context, auth) => {
@@ -74,6 +74,7 @@ export const getServerSideProps = withDefaultUserAuthRequirements<
     };
   }
 
+  const systemVault = await VaultResource.fetchWorkspaceSystemVault(auth);
   const vault = dataSourceView.vault;
   const canWriteInVault = vault.canWrite(auth);
   const canReadInVault = vault.canRead(auth);
@@ -106,6 +107,7 @@ export const getServerSideProps = withDefaultUserAuthRequirements<
       plan,
       subscription,
       vault: vault.toJSON(),
+      systemVault: systemVault.toJSON(),
       connector,
     },
   };
@@ -121,6 +123,7 @@ export default function Vault({
   parentId,
   plan,
   isAdmin,
+  systemVault,
   connector,
 }: InferGetServerSidePropsType<typeof getServerSideProps>) {
   const router = useRouter();
@@ -140,6 +143,7 @@ export default function Vault({
           );
         }}
         isAdmin={isAdmin}
+        systemVault={systemVault}
         connector={connector}
       />
     </Page.Vertical>

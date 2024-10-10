@@ -1,11 +1,12 @@
 import type {
+  AgentConfigurationScope,
   AgentConfigurationType,
   AgentsGetViewType,
-  DataSourceType,
+  AgentUserListStatus,
   LightAgentConfigurationType,
   LightWorkspaceType,
 } from "@dust-tt/types";
-import { useContext, useMemo } from "react";
+import { useCallback, useContext, useMemo } from "react";
 import type { Fetcher } from "swr";
 
 import { SendNotificationsContext } from "@app/components/sparkle/Notification";
@@ -15,10 +16,12 @@ import {
   useSWRWithDefaults,
 } from "@app/lib/swr/swr";
 import type { GetAgentConfigurationsResponseBody } from "@app/pages/api/w/[wId]/assistant/agent_configurations";
+import type { PostAgentScopeRequestBody } from "@app/pages/api/w/[wId]/assistant/agent_configurations/[aId]/scope";
 import type { GetAgentUsageResponseBody } from "@app/pages/api/w/[wId]/assistant/agent_configurations/[aId]/usage";
+import type { GetSlackChannelsLinkedWithAgentResponseBody } from "@app/pages/api/w/[wId]/assistant/builder/slack/channels_linked_with_agent";
 import type { FetchAssistantTemplatesResponse } from "@app/pages/api/w/[wId]/assistant/builder/templates";
 import type { FetchAssistantTemplateResponse } from "@app/pages/api/w/[wId]/assistant/builder/templates/[tId]";
-import type { GetSlackChannelsLinkedWithAgentResponseBody } from "@app/pages/api/w/[wId]/data_sources/[dsId]/managed/slack/channels_linked_with_agent";
+import type { PostAgentListStatusRequestBody } from "@app/pages/api/w/[wId]/members/me/agent_list_status";
 
 export function useAssistantTemplates({
   workspaceId,
@@ -139,8 +142,10 @@ export function useAgentConfigurations({
 
 export function useProgressiveAgentConfigurations({
   workspaceId,
+  disabled,
 }: {
   workspaceId: string;
+  disabled?: boolean;
 }) {
   const {
     agentConfigurations: initialAgentConfigurations,
@@ -150,6 +155,7 @@ export function useProgressiveAgentConfigurations({
     agentsGetView: "assistants-search",
     limit: 24,
     includes: ["usage"],
+    disabled,
   });
 
   const {
@@ -210,9 +216,11 @@ export function useAgentConfiguration({
 export function useAgentUsage({
   workspaceId,
   agentConfigurationId,
+  disabled,
 }: {
   workspaceId: string;
   agentConfigurationId: string | null;
+  disabled?: boolean;
 }) {
   const agentUsageFetcher: Fetcher<GetAgentUsageResponseBody> = fetcher;
   const fetchUrl = agentConfigurationId
@@ -220,7 +228,8 @@ export function useAgentUsage({
     : null;
   const { data, error, mutate } = useSWRWithDefaults(
     fetchUrl,
-    agentUsageFetcher
+    agentUsageFetcher,
+    { disabled }
   );
 
   return {
@@ -233,26 +242,25 @@ export function useAgentUsage({
 
 export function useSlackChannelsLinkedWithAgent({
   workspaceId,
-  dataSource,
   disabled,
 }: {
   workspaceId: string;
-  dataSource?: DataSourceType;
   disabled?: boolean;
 }) {
   const slackChannelsLinkedWithAgentFetcher: Fetcher<GetSlackChannelsLinkedWithAgentResponseBody> =
     fetcher;
 
   const { data, error, mutate } = useSWRWithDefaults(
-    `/api/w/${workspaceId}/data_sources/${dataSource?.sId}/managed/slack/channels_linked_with_agent`,
+    `/api/w/${workspaceId}/assistant/builder/slack/channels_linked_with_agent`,
     slackChannelsLinkedWithAgentFetcher,
     {
-      disabled: !!disabled || !dataSource,
+      disabled: !!disabled,
     }
   );
 
   return {
     slackChannels: useMemo(() => (data ? data.slackChannels : []), [data]),
+    slackDataSource: data?.slackDataSource,
     isSlackChannelsLoading: !error && !data,
     isSlackChannelsError: error,
     mutateSlackChannels: mutate,
@@ -312,4 +320,167 @@ export function useDeleteAgentConfiguration({
   };
 
   return doDelete;
+}
+
+export function useUpdateAgentScope({
+  owner,
+  agentConfigurationId,
+}: {
+  owner: LightWorkspaceType;
+  agentConfigurationId: string | null;
+}) {
+  const sendNotification = useContext(SendNotificationsContext);
+  const { mutateAgentConfiguration: mutateCurrentAgentConfiguration } =
+    useAgentConfiguration({
+      workspaceId: owner.sId,
+      agentConfigurationId,
+      disabled: true,
+    });
+  const { mutate: mutateAgentConfigurations } =
+    useProgressiveAgentConfigurations({
+      workspaceId: owner.sId,
+      disabled: true,
+    });
+
+  const doUpdate = useCallback(
+    async (scope: Exclude<AgentConfigurationScope, "global">) => {
+      const body: PostAgentScopeRequestBody = {
+        scope,
+      };
+
+      try {
+        if (!agentConfigurationId) {
+          throw new Error(
+            "Cannot update scope of a non-existing agent. Action: make sure agentConfigurationId is not null."
+          );
+        }
+
+        const res = await fetch(
+          `/api/w/${owner.sId}/assistant/agent_configurations/${agentConfigurationId}/scope`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+          }
+        );
+
+        if (res.ok) {
+          sendNotification({
+            title: `Assistant sharing updated.`,
+            type: "success",
+          });
+          await mutateAgentConfigurations();
+          await mutateCurrentAgentConfiguration();
+          return true;
+        } else {
+          const data = await res.json();
+          sendNotification({
+            title: `Error updating assistant sharing.`,
+            description: data.error.message,
+            type: "error",
+          });
+          return false;
+        }
+      } catch (error) {
+        sendNotification({
+          title: `Error updating assistant sharing.`,
+          description: (error as Error).message || "An unknown error occurred",
+          type: "error",
+        });
+        return false;
+      }
+    },
+    [
+      agentConfigurationId,
+      mutateAgentConfigurations,
+      mutateCurrentAgentConfiguration,
+      owner.sId,
+      sendNotification,
+    ]
+  );
+  return doUpdate;
+}
+
+export function useUpdateAgentUserListStatus({
+  owner,
+  agentConfigurationId,
+}: {
+  owner: LightWorkspaceType;
+  agentConfigurationId: string;
+}) {
+  const sendNotification = useContext(SendNotificationsContext);
+  const { mutateAgentConfiguration: mutateCurrentAgentConfiguration } =
+    useAgentConfiguration({
+      workspaceId: owner.sId,
+      agentConfigurationId,
+      disabled: true,
+    });
+  const { mutate: mutateAgentConfigurations } =
+    useProgressiveAgentConfigurations({
+      workspaceId: owner.sId,
+      disabled: true,
+    });
+
+  const doUpdate = useCallback(
+    async (listStatus: AgentUserListStatus) => {
+      try {
+        const body: PostAgentListStatusRequestBody = {
+          agentId: agentConfigurationId,
+          listStatus,
+        };
+
+        const res = await fetch(
+          `/api/w/${owner.sId}/members/me/agent_list_status`,
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+          }
+        );
+
+        if (res.ok) {
+          sendNotification({
+            title: `Assistant ${
+              listStatus === "in-list"
+                ? "added to your list"
+                : "removed from your list"
+            }`,
+            type: "success",
+          });
+          await mutateAgentConfigurations();
+          await mutateCurrentAgentConfiguration();
+          return true;
+        } else {
+          const data = await res.json();
+          sendNotification({
+            title: `Error ${
+              listStatus === "in-list" ? "adding" : "removing"
+            } Assistant`,
+            description: data.error.message,
+            type: "error",
+          });
+          return false;
+        }
+      } catch (error) {
+        sendNotification({
+          title: `Error updating assistant list.`,
+          description: (error as Error).message || "An unknown error occurred",
+          type: "error",
+        });
+        return false;
+      }
+    },
+    [
+      agentConfigurationId,
+      mutateAgentConfigurations,
+      mutateCurrentAgentConfiguration,
+      owner.sId,
+      sendNotification,
+    ]
+  );
+  return doUpdate;
 }

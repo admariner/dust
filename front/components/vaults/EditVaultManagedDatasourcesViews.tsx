@@ -1,17 +1,19 @@
-import { Button, Dialog, PlusIcon, Spinner } from "@dust-tt/sparkle";
+import { Button, Dialog, PlusIcon } from "@dust-tt/sparkle";
 import type {
   APIError,
   DataSourceViewSelectionConfigurations,
+  DataSourceViewType,
   VaultType,
   WorkspaceType,
 } from "@dust-tt/types";
 import { removeNulls } from "@dust-tt/types";
 import { useRouter } from "next/router";
-import React, { useState } from "react";
+import React, { useMemo, useState } from "react";
 
 import { RequestDataSourceModal } from "@app/components/data_source/RequestDataSourceModal";
 import { SendNotificationsContext } from "@app/components/sparkle/Notification";
 import VaultManagedDataSourcesViewsModal from "@app/components/vaults/VaultManagedDatasourcesViewsModal";
+import { isManaged } from "@app/lib/data_sources";
 import {
   useVaultDataSourceViews,
   useVaultDataSourceViewsWithDetails,
@@ -22,6 +24,7 @@ interface EditVaultManagedDataSourcesViewsProps {
   owner: WorkspaceType;
   systemVault: VaultType;
   vault: VaultType;
+  dataSourceView?: DataSourceViewType;
 }
 
 export function EditVaultManagedDataSourcesViews({
@@ -29,6 +32,7 @@ export function EditVaultManagedDataSourcesViews({
   owner,
   systemVault,
   vault,
+  dataSourceView,
 }: EditVaultManagedDataSourcesViewsProps) {
   const sendNotification = React.useContext(SendNotificationsContext);
 
@@ -57,16 +61,30 @@ export function EditVaultManagedDataSourcesViews({
     category: "managed",
     disabled: !isAdmin,
   });
+  const filteredSystemVaultDataSourceViews = useMemo(
+    () =>
+      systemVaultDataSourceViews.filter(
+        (dsv) =>
+          isManaged(dsv.dataSource) &&
+          (!dataSourceView ||
+            dsv.dataSource.sId === dataSourceView.dataSource.sId)
+      ),
+    [systemVaultDataSourceViews, dataSourceView]
+  );
+
+  const filteredDataSourceViews = vaultDataSourceViews.filter(
+    (dsv) => !dataSourceView || dsv.sId === dataSourceView.sId
+  );
 
   const updateVaultDataSourceViews = async (
     selectionConfigurations: DataSourceViewSelectionConfigurations
   ) => {
-    // Check if a data source view in the vault is no longer in the selection configurations by comparing the data source.
-    // If so, delete it.
-    const deletedViews = vaultDataSourceViews.filter(
+    // Check if a data source view in the vault is no longer in the selection configurations by
+    // comparing the data source.  If so, delete it.
+    const deletedViews = filteredDataSourceViews.filter(
       (dsv) =>
         !Object.values(selectionConfigurations).find(
-          (sc) => sc.dataSourceView.dataSource.name === dsv.dataSource.name
+          (sc) => sc.dataSourceView.dataSource.sId === dsv.dataSource.sId
         )
     );
 
@@ -100,7 +118,7 @@ export function EditVaultManagedDataSourcesViews({
             dataSourceView: { dataSource: sDs },
           } = selectionConfiguration;
 
-          const existingViewForDs = vaultDataSourceViews.find(
+          const existingViewForDs = filteredDataSourceViews.find(
             (d) => d.dataSource.sId === sDs.sId
           );
 
@@ -181,11 +199,7 @@ export function EditVaultManagedDataSourcesViews({
   };
 
   if (isSystemVaultDataSourceViewsLoading || isVaultDataSourceViewsLoading) {
-    return (
-      <div className="mt-8 flex justify-center">
-        <Spinner size="lg" />
-      </div>
-    );
+    return false;
   }
   return isAdmin ? (
     <>
@@ -196,15 +210,11 @@ export function EditVaultManagedDataSourcesViews({
           setShowDataSourcesModal(false);
         }}
         owner={owner}
-        systemVaultDataSourceViews={systemVaultDataSourceViews.filter(
-          (dsv) =>
-            dsv.dataSource.connectorProvider &&
-            dsv.dataSource.connectorProvider !== "webcrawler"
-        )}
+        systemVaultDataSourceViews={filteredSystemVaultDataSourceViews}
         onSave={async (selectionConfigurations) => {
           await updateVaultDataSourceViews(selectionConfigurations);
         }}
-        initialSelectedDataSources={vaultDataSourceViews}
+        initialSelectedDataSources={filteredDataSourceViews}
       />
       <Dialog
         isOpen={showNoConnectionDialog}
@@ -236,7 +246,7 @@ export function EditVaultManagedDataSourcesViews({
     </>
   ) : (
     <RequestDataSourceModal
-      dataSources={vaultDataSourceViews.map((view) => view.dataSource)}
+      dataSources={filteredDataSourceViews.map((view) => view.dataSource)}
       owner={owner}
     />
   );

@@ -161,7 +161,9 @@ const columns: ColumnDef<Data>[] = [
       width: "100px",
     },
     cell: (info) => (
-      <DataTable.CellContent>{info.row.original.addedBy}</DataTable.CellContent>
+      <DataTable.CellContentWithCopy>
+        {info.row.original.addedBy}
+      </DataTable.CellContentWithCopy>
     ),
   },
   {
@@ -198,7 +200,7 @@ export const DataTableExample = () => {
         name="filter"
         placeholder="Filter"
         value={filter}
-        onChange={(v) => setFilter(v)}
+        onChange={(e) => setFilter(e.target.value)}
       />
       <DataTable
         data={data}
@@ -222,7 +224,7 @@ export const DataTableClientSideSortingExample = () => {
         name="filter"
         placeholder="Filter"
         value={filter}
-        onChange={(v) => setFilter(v)}
+        onChange={(e) => setFilter(e.target.value)}
       />
       <DataTable
         className="s-w-full s-max-w-4xl s-overflow-x-auto"
@@ -251,7 +253,7 @@ export const DataTablePaginatedExample = () => {
         name="filter"
         placeholder="Filter"
         value={filter}
-        onChange={(v) => setFilter(v)}
+        onChange={(e) => setFilter(e.target.value)}
       />
       <DataTable
         className="s-w-full s-max-w-4xl s-overflow-x-auto"
@@ -301,7 +303,7 @@ export const DataTablePaginatedServerSideExample = () => {
         name="filter"
         placeholder="Filter"
         value={filter}
-        onChange={(v) => setFilter(v)}
+        onChange={(e) => setFilter(e.target.value)}
       />
       <DataTable
         className="s-w-full s-max-w-4xl s-overflow-x-auto"
